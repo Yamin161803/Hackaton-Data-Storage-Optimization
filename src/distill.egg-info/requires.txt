@@ -1,0 +1,10 @@
+typer>=0.12
+faster-whisper
+opencv-python
+imagehash
+PyMuPDF
+python-pptx
+datasketch
+
+[dev]
+pytest>=8.0
