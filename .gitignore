@@ -9,3 +9,6 @@ data/*
 models/
 # Audio test clips (too big / disposable)
 *.wav
+
+# Secrets
+.hf_token
