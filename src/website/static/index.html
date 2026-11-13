@@ -57,23 +57,25 @@
         <span class="is-drop__icon" aria-hidden="true">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 18v-6M9 15l3-3 3 3"/></svg>
         </span>
-        <span class="is-drop__title">Dra hit videor eller klicka för att välja</span>
+        <span class="is-drop__title">Dra hit videor eller en hel mapp</span>
+        <span class="is-drop__hint">eller klicka för att välja filer</span>
         <span class="is-drop__hint" id="limitHint"></span>
       </label>
+      <input type="file" id="folderInput" webkitdirectory multiple hidden>
+      <div class="is-folder-row">
+        <button class="is-btn is-btn--ghost is-btn--sm" id="folderBtn" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          Välj mapp
+        </button>
+        <span class="is-drop__hint">Alla videor i mappen och undermapparna läggs till</span>
+      </div>
 
+      <div class="is-queue-head" id="queueHead" hidden></div>
       <div class="is-list" id="fileList" role="list">
         <div class="is-empty" id="emptyState">Inga filer valda än.</div>
       </div>
 
       <fieldset class="is-options" id="speakerOptions">
-        <label class="is-check">
-          <input type="checkbox" id="summaryInput" checked>
-          <span>Sammanfattning</span>
-        </label>
-        <label class="is-check">
-          <input type="checkbox" id="keywordsInput">
-          <span>Sökord</span>
-        </label>
         <label class="is-check">
           <input type="checkbox" id="speakersInput">
           <span>Visa vem som pratar</span>
@@ -82,7 +84,7 @@
           Antal talare
           <input type="number" id="numSpeakersInput" min="1" max="20" placeholder="auto" inputmode="numeric">
         </label>
-        <p class="is-options__hint">Sammanfattning och sökord görs av en lokal AI-modell (Ollama). Talare tar längre tid: de identifieras på datorns processor.</p>
+        <p class="is-options__hint">Tar längre tid: talarna identifieras på datorns processor.</p>
       </fieldset>
 
       <div class="is-actions">
@@ -101,7 +103,7 @@
         Resultat
       </h2>
       <div id="resultBody">
-        <p class="is-placeholder">Välj en fil i listan för att se hur mycket den krympte. Färdiga filer går att ladda ner härifrån.</p>
+        <p class="is-placeholder">Färdiga videor visas här med hur mycket mindre de blev. Längst ner står den totala besparingen.</p>
       </div>
     </section>
   </div>

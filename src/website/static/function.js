@@ -16,13 +16,11 @@ const startBtn = $("#startBtn"), clearBtn = $("#clearBtn"), resultBody = $("#res
 const emptyState = $("#emptyState");
 const speakersInput = $("#speakersInput"), numSpeakersInput = $("#numSpeakersInput");
 const numSpeakersLabel = $("#numSpeakersLabel"), speakerOptions = $("#speakerOptions");
-const summaryInput = $("#summaryInput"), keywordsInput = $("#keywordsInput");
 
 /* ---------- Val: vem som pratar ---------- */
 function speakerChoice() {
   const n = parseInt(numSpeakersInput.value, 10);
-  return { speakers: speakersInput.checked, num: speakersInput.checked && n > 0 ? n : null,
-           summary: summaryInput.checked, keywords: keywordsInput.checked };
+  return { speakers: speakersInput.checked, num: speakersInput.checked && n > 0 ? n : null };
 }
 function updateSpeakerOptions() { numSpeakersLabel.hidden = !speakersInput.checked; }
 speakersInput.addEventListener("change", updateSpeakerOptions);
@@ -45,13 +43,23 @@ $("#themeBtn").addEventListener("click", () => {
 
 /* ---------- Tillstånd ---------- */
 let items = [];           // { id, file, status, progress, outBlob, outName, outSize, error }
-let selectedId = null;
 let running = false;
 let nextId = 1;
+const queueHead = $("#queueHead");
 
 const STATUS_LABEL = {
-  queued: "I KÖ", uploading: "SKICKAR", processing: "ARBETAR", done: "KLAR", error: "FEL"
+  queued: "I KÖ", uploading: "SKICKAR", processing: "ARBETAR", done: "KLAR", error: "FEL",
+  duplicate: "DUBBLETT"
 };
+
+// Dubblett = samma video-id (hash av videons innehåll, räknas ut av servern).
+// Namnet spelar ingen roll. Dubbletten räknas som borttagen: ingen nedladdning,
+// hela storleken räknas som sparad i totalen.
+function markDuplicate(it, original) {
+  it.status = "duplicate";
+  it.dupOf = original.file.name;
+  it.outBlob = null;
+}
 
 function fmtBytes(n) {
   if (n == null) return "–";
@@ -62,22 +70,87 @@ function fmtBytes(n) {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
+// Hur mycket mindre: "−99,98 %" (fler decimaler när nästan allt försvann)
+function fmtSaved(orig, out) {
+  if (!orig) return { text: "–", grew: false, kept: 100 };
+  const saved = (1 - out / orig) * 100;
+  const grew = saved < 0;
+  const abs = Math.abs(saved);
+  const dec = abs >= 99.9 ? 3 : abs >= 99 ? 2 : 1;
+  return { text: `${grew ? "+" : "−"}${abs.toFixed(dec).replace(".", ",")} %`, grew,
+           kept: Math.min(100, (out / orig) * 100) };
+}
+function fmtFactor(orig, out) {
+  if (!orig || !out || out >= orig) return "";
+  const f = orig / out;
+  return `${f >= 100 ? Math.round(f).toLocaleString("sv-SE") : f.toFixed(1).replace(".", ",")}× mindre`;
+}
 
 /* ---------- Lägg till filer ---------- */
+// Samma ändelser som servern tar emot (VIDEO_ENDELSER i server.py)
+const VIDEO_EXT = [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"];
+const isVideo = (f) => VIDEO_EXT.some(e => f.name.toLowerCase().endsWith(e));
+let skippedNote = "";   // visas i kö-rutan när en mapp innehöll annat än videor
+
+// files: lista av File eller { file, path } (path = sökväg i mappen som släpptes)
 function addFiles(fileList) {
-  for (const f of fileList) {
-    const item = { id: nextId++, file: f, status: "queued", progress: 0, choice: null };
+  let skipped = 0, added = 0;
+  for (const entry of fileList) {
+    const f = entry instanceof File ? entry : entry.file;
+    const path = entry instanceof File ? (f.webkitRelativePath || "") : entry.path;
+    if (!isVideo(f)) { skipped++; continue; }
+    added++;
+    const item = { id: nextId++, file: f, path, status: "queued", progress: 0, choice: null };
     if (f.size > MAX_FILE_MB * 1024 * 1024) {
       item.status = "error";
       item.error = `Filen är ${fmtBytes(f.size)}. Maxstorleken är ${MAX_FILE_MB} MB.`;
     }
     items.push(item);
-    if (selectedId == null) selectedId = item.id;
   }
+  skippedNote = skipped
+    ? `${skipped} ${skipped === 1 ? "fil" : "filer"} som inte är video hoppades över` +
+      (added ? "" : " – inga videor hittades")
+    : "";
   render();
 }
 
+// Går igenom en släppt mapp (och dess undermappar) och samlar alla filer
+async function readEntry(entry, out) {
+  if (entry.isFile) {
+    const file = await new Promise((res, rej) => entry.file(res, rej));
+    out.push({ file, path: entry.fullPath.replace(/^\//, "") });
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    // readEntries ger bara en del åt gången; läs tills den returnerar en tom lista
+    for (;;) {
+      const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+      if (!batch.length) break;
+      for (const child of batch) await readEntry(child, out);
+    }
+  }
+}
+
+async function filesFromDrop(dt) {
+  // Entries måste hämtas direkt i drop-händelsen, innan något await
+  const entries = [...(dt.items || [])]
+    .map(i => i.kind === "file" && i.webkitGetAsEntry ? i.webkitGetAsEntry() : null);
+  if (!entries.length || entries.some(e => !e)) return [...dt.files];   // äldre webbläsare
+  const out = [];
+  for (const e of entries) {
+    try { await readEntry(e, out); } catch (err) { console.warn("Kunde inte läsa", e.fullPath, err); }
+  }
+  out.sort((a, b) => a.path.localeCompare(b.path, "sv"));
+  return out;
+}
+
 fileInput.addEventListener("change", () => { addFiles(fileInput.files); fileInput.value = ""; });
+const folderInput = $("#folderInput");
+$("#folderBtn").addEventListener("click", () => folderInput.click());
+folderInput.addEventListener("change", () => {
+  const files = [...folderInput.files].sort((a, b) =>
+    a.webkitRelativePath.localeCompare(b.webkitRelativePath, "sv"));
+  addFiles(files); folderInput.value = "";
+});
 dropZone.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
 });
@@ -87,36 +160,14 @@ dropZone.addEventListener("keydown", (e) => {
 ["dragleave", "drop"].forEach(ev => dropZone.addEventListener(ev, (e) => {
   e.preventDefault(); dropZone.classList.remove("is-dragover");
 }));
-dropZone.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+dropZone.addEventListener("drop", async (e) => {
+  if (!e.dataTransfer.items.length && !e.dataTransfer.files.length) return;
+  addFiles(await filesFromDrop(e.dataTransfer));
+});
 
 /* ---------- Rendering ---------- */
 function render() {
-  list.querySelectorAll(".is-path-row").forEach(n => n.remove());
-  emptyState.hidden = items.length > 0;
-
-  for (const it of items) {
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "is-path-row" + (it.id === selectedId ? " is-selected" : "");
-    row.setAttribute("role", "listitem");
-    row.dataset.id = it.id;
-    const showBar = it.status === "uploading" || it.status === "processing";
-    const sizeInfo = it.status === "done"
-      ? `${fmtBytes(it.file.size)} → ${fmtBytes(it.outSize)}`
-      : fmtBytes(it.file.size);
-    row.innerHTML = `
-      <span class="is-method-badge" data-status="${it.status}">${STATUS_LABEL[it.status]}</span>
-      <span class="is-row__main">
-        <div class="is-row__name">${escapeHtml(it.file.name)}</div>
-        <div class="is-row__meta"><span class="is-chip">${sizeInfo}</span>${
-          it.status === "uploading" ? `<span>${Math.round(it.progress)} %</span>` : ""}</div>
-        ${showBar ? `<div class="is-mini-bar"><div style="width:${it.status === "processing" ? 100 : it.progress}%"></div></div>` : ""}
-      </span>
-      <span>${it.status === "done" ? downloadIcon() : ""}</span>`;
-    row.addEventListener("click", () => select(it.id));
-    list.appendChild(row);
-  }
-
+  renderQueue();
   const pending = items.some(i => i.status === "queued");
   startBtn.disabled = running || !pending;
   speakerOptions.disabled = running;
@@ -125,15 +176,57 @@ function render() {
   renderResult();
 }
 
-function downloadIcon() {
-  return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>`;
-}
+// Vänster: alla valda videor och vilken som bearbetas just nu
+function renderQueue() {
+  list.querySelectorAll(".is-path-row").forEach(n => n.remove());
+  emptyState.hidden = items.length > 0;
 
-function select(id) {
-  selectedId = id;
-  render();
-  const row = list.querySelector(`[data-id="${id}"]`);
-  if (row) { row.classList.add("is-pulse"); row.addEventListener("animationend", () => row.classList.remove("is-pulse"), { once: true }); }
+  const real = items.filter(i => i.status !== "duplicate");
+  const dups = items.length - real.length;
+  const total = real.length;
+  const finished = real.filter(i => i.status === "done" || i.status === "error").length;
+  const active = items.find(i => i.status === "uploading" || i.status === "processing");
+  queueHead.hidden = items.length === 0 && !skippedNote;
+  if (items.length || skippedNote) {
+    const pct = total ? (finished / total) * 100 : 0;
+    const label = active
+      ? `<span class="is-queue-now"><span class="is-spinner" aria-hidden="true"></span>${active.status === "uploading" ? "Skickar" : "Bearbetar"} <b>${escapeHtml(active.file.name)}</b></span>`
+      : `<span class="is-queue-now">${!total ? "Inga videor att bearbeta" : finished === total ? "Alla videor är klara" : running ? "Startar…" : "Redo att starta"}</span>`;
+    queueHead.innerHTML = `
+      <div class="is-queue-line">${label}<span class="is-queue-count">${finished} av ${total} bearbetade</span></div>
+      <div class="is-mini-bar"><div style="width:${pct}%"></div></div>
+      ${skippedNote ? `<div class="is-queue-skip">${escapeHtml(skippedNote)}</div>` : ""}
+      ${dups ? `<div class="is-queue-dups">${dups} ${dups === 1 ? "dubblett togs bort" : "dubbletter togs bort"}</div>` : ""}`;
+  }
+
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = "is-path-row is-row--" + it.status;
+    row.setAttribute("role", "listitem");
+    row.dataset.id = it.id;
+    let meta = `<span class="is-chip">${fmtBytes(it.file.size)}</span>`;
+    if (it.status === "uploading") meta += `<span>${Math.round(it.progress)} % uppladdat</span>`;
+    if (it.status === "processing") meta += `<span>Skapar anteckningar…</span>`;
+    if (it.status === "done") meta += `<span class="is-good-text">${fmtSaved(it.file.size, it.outSize).text}</span>`;
+    if (it.status === "error") meta += `<span class="is-bad-text">Misslyckades</span>`;
+    if (it.status === "duplicate") meta += `<span class="is-bad-text">Samma hash som ${escapeHtml(it.dupOf)} – borttagen</span>`;
+    let bar = "";
+    if (it.status === "uploading") bar = `<div class="is-mini-bar"><div style="width:${it.progress}%"></div></div>`;
+    if (it.status === "processing") bar = `<div class="is-mini-bar is-indeterminate"><div></div></div>`;
+    const removable = !running && it.status !== "uploading" && it.status !== "processing";
+    row.innerHTML = `
+      <span class="is-method-badge" data-status="${it.status}">${STATUS_LABEL[it.status]}</span>
+      <span class="is-row__main">
+        <div class="is-row__name" title="${escapeHtml(it.path || it.file.name)}">${it.path && it.path.includes("/")
+          ? `<span class="is-row__dir">${escapeHtml(it.path.slice(0, it.path.lastIndexOf("/") + 1))}</span>` : ""}${escapeHtml(it.file.name)}</div>
+        <div class="is-row__meta">${meta}</div>
+        ${bar}
+      </span>
+      <span>${removable ? `<button class="is-x" type="button" aria-label="Ta bort ${escapeHtml(it.file.name)}">×</button>` : ""}</span>`;
+    const x = row.querySelector(".is-x");
+    if (x) x.addEventListener("click", () => { items = items.filter(i => i !== it); render(); });
+    list.appendChild(row);
+  }
 }
 
 function updateSteps() {
@@ -145,77 +238,93 @@ function updateSteps() {
   });
 }
 
+const DL_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>`;
+
+// Höger: lista över färdiga videor + total längst ner
 function renderResult() {
-  const it = items.find(i => i.id === selectedId);
-  if (!it) {
-    resultBody.innerHTML = `<p class="is-placeholder">Välj en fil i listan för att se hur mycket den krympte. Färdiga filer går att ladda ner härifrån.</p>`;
-    return;
-  }
-  const name = `<div class="is-mono" style="margin-bottom:16px;word-break:break-all">${escapeHtml(it.file.name)}</div>`;
-
-  if (it.status === "error") {
-    resultBody.innerHTML = name + `
-      <div class="is-op-card" data-kind="error">
-        <strong>Anteckningarna kunde inte skapas</strong>${escapeHtml(it.error || "Okänt fel.")}
-      </div>
-      <div class="is-actions"><button class="is-btn is-btn--ghost is-btn--sm" id="retryBtn" type="button">Försök igen</button></div>`;
-    $("#retryBtn").addEventListener("click", () => {
-      if (it.file.size > MAX_FILE_MB * 1024 * 1024) return;
-      it.status = "queued"; it.error = null; it.progress = 0; render();
-    });
+  const done = items.filter(i => i.status === "done");
+  const failed = items.filter(i => i.status === "error");
+  const dups = items.filter(i => i.status === "duplicate");
+  if (!done.length && !failed.length && !dups.length) {
+    resultBody.innerHTML = `<p class="is-placeholder">Färdiga videor visas här med hur mycket mindre de blev. Längst ner står den totala besparingen.</p>`;
     return;
   }
 
-  if (it.status !== "done") {
-    const msg = {
-      queued: "Videon väntar. Klicka på Skapa anteckningar för att starta.",
-      uploading: `Skickar filen till servern (${Math.round(it.progress)} %).`,
-      processing: it.choice && it.choice.speakers
-        ? "Servern gör anteckningar av videon och tar reda på vem som pratar. Det tar längre tid, ungefär lika lång tid som videon."
-        : "Servern gör anteckningar av videon: bildrutor, transkribering och sammanfattning. Det tar några minuter för långa videor."
-    }[it.status];
-    resultBody.innerHTML = name + `
-      <div class="is-stats">
-        <div><div class="is-stat__num">${fmtBytes(it.file.size)}</div><div class="is-stat__label">Originalstorlek</div></div>
-        <div><div class="is-stat__num">–</div><div class="is-stat__label">Komprimerad</div></div>
-        <div><div class="is-stat__num">–</div><div class="is-stat__label">Besparing</div></div>
-      </div>
-      <div class="is-op-card" data-kind="info">${msg}</div>`;
-    return;
+  let html = `<div class="is-res-list" role="list">`;
+  for (const it of done) {
+    const s = fmtSaved(it.file.size, it.outSize);
+    const factor = fmtFactor(it.file.size, it.outSize);
+    html += `
+      <div class="is-res-row" role="listitem">
+        <div class="is-res-top">
+          <div class="is-row__name" title="${escapeHtml(it.file.name)}">${escapeHtml(it.file.name)}</div>
+          <span class="is-res-pct ${s.grew ? "is-bad-text" : "is-good-text"}">${s.text}</span>
+        </div>
+        <div class="is-res-bottom">
+          <span class="is-row__meta">${fmtBytes(it.file.size)} → <b>${fmtBytes(it.outSize)}</b>${factor ? `<span class="is-chip">${factor}</span>` : ""}${it.cached ? `<span class="is-chip">fanns redan</span>` : ""}</span>
+          <button class="is-btn is-btn--ghost is-btn--sm" type="button" data-dl="${it.id}" aria-label="Ladda ner anteckningar för ${escapeHtml(it.file.name)}">${DL_ICON}.md</button>
+        </div>
+        <div class="is-dist-bar is-dist-bar--thin" aria-hidden="true">
+          <div style="width:${Math.max(s.kept, 0.6)}%;background:linear-gradient(90deg,#1174E6,#00A9CE)"></div>
+        </div>
+        ${it.warning ? `<div class="is-res-warn">Utan talare: ${escapeHtml(it.warning)}</div>` : ""}
+      </div>`;
   }
+  for (const it of failed) {
+    html += `
+      <div class="is-res-row is-res-row--error" role="listitem">
+        <div class="is-res-top">
+          <div class="is-row__name" title="${escapeHtml(it.file.name)}">${escapeHtml(it.file.name)}</div>
+          <span class="is-res-pct is-bad-text">Fel</span>
+        </div>
+        <div class="is-res-warn">${escapeHtml(it.error || "Okänt fel.")}</div>
+        ${it.file.size <= MAX_FILE_MB * 1024 * 1024 && !running
+          ? `<div><button class="is-btn is-btn--ghost is-btn--sm" type="button" data-retry="${it.id}">Försök igen</button></div>` : ""}
+      </div>`;
+  }
+  html += `</div>`;
 
-  const orig = it.file.size, out = it.outSize;
-  const saved = orig > 0 ? (1 - out / orig) * 100 : 0;
-  const keptPct = orig > 0 ? Math.min(100, (out / orig) * 100) : 100;
-  const grew = out > orig;
+  if (done.length || dups.length) {
+    // Borttagna dubbletter räknas som sparat utrymme: hela storleken före, 0 efter
+    const dupSize = dups.reduce((a, i) => a + i.file.size, 0);
+    const notesOrig = done.reduce((a, i) => a + i.file.size, 0);
+    const orig = notesOrig + dupSize;
+    const out = done.reduce((a, i) => a + i.outSize, 0);
+    const s = fmtSaved(orig, out);
+    const factor = fmtFactor(orig, out);
+    html += `
+      <div class="is-total">
+        <div class="is-total__title">Totalt för ${done.length + dups.length} ${done.length + dups.length === 1 ? "video" : "videor"}</div>
+        <div class="is-stats">
+          <div><div class="is-stat__num">${fmtBytes(orig)}</div><div class="is-stat__label">Före</div></div>
+          <div><div class="is-stat__num">${fmtBytes(out)}</div><div class="is-stat__label">Efter</div></div>
+          <div><div class="is-stat__num ${s.grew ? "is-bad" : "is-good"}">${s.text}</div><div class="is-stat__label">${s.grew ? "Större" : "Mindre"}</div></div>
+        </div>
+        <div class="is-dist-bar" role="img" aria-label="Kvar: ${s.kept.toFixed(2)} procent av originalet">
+          <div style="width:${Math.max(s.kept, 0.6)}%;background:linear-gradient(90deg,#1174E6,#00A9CE)"></div>
+          <div style="flex:1;background:rgba(46,125,50,.55)"></div>
+        </div>
+        <div class="is-legend">
+          <span><i style="background:#1174E6"></i>Kvar ${fmtBytes(out)}</span>
+          <span><i style="background:#2E7D32"></i>Sparat ${fmtBytes(Math.max(orig - out, 0))}</span>
+          ${factor ? `<span>${factor}</span>` : ""}
+        </div>
+        ${dups.length ? `
+        <div class="is-total__split">
+          <div><span>${done.length} ${done.length === 1 ? "video" : "videor"} → anteckningar</span><b>${fmtBytes(notesOrig)} → ${fmtBytes(out)}</b></div>
+          <div class="is-total__dup"><span>${dups.length} ${dups.length === 1 ? "dubblett borttagen" : "dubbletter borttagna"}</span><b>${fmtBytes(dupSize)} → 0 B</b></div>
+        </div>` : ""}
+      </div>`;
+  }
+  resultBody.innerHTML = html;
 
-  resultBody.innerHTML = name + `
-    <div class="is-stats">
-      <div><div class="is-stat__num">${fmtBytes(orig)}</div><div class="is-stat__label">Originalstorlek</div></div>
-      <div><div class="is-stat__num">${fmtBytes(out)}</div><div class="is-stat__label">Komprimerad</div></div>
-      <div><div class="is-stat__num ${grew ? "is-bad" : "is-good"}">${grew ? "+" : "−"}${Math.abs(saved).toFixed(1)} %</div><div class="is-stat__label">${grew ? "Större än originalet" : "Besparing"}</div></div>
-    </div>
-    <div class="is-dist-bar" role="img" aria-label="Komprimerad storlek ${keptPct.toFixed(0)} procent av originalet">
-      <div style="width:${keptPct}%;background:linear-gradient(90deg,#1174E6,#00A9CE)"></div>
-      <div style="width:${100 - keptPct}%;background:rgba(46,125,50,.55)"></div>
-    </div>
-    <div class="is-legend">
-      <span><i style="background:#1174E6"></i>Kvar</span>
-      <span><i style="background:#2E7D32"></i>Sparat</span>
-    </div>
-    <div class="is-op-card" data-kind="ok">
-      <strong>${it.cached ? "Videon fanns redan – sparade anteckningar" : "Klar att ladda ner"}</strong>
-      ${it.choice && it.choice.speakers && !it.warning ? "Med talare. " : ""}
-      Sparas som <span class="is-mono is-token">${escapeHtml(it.outName)}</span>${it.fileId ? `<br>SHA-256 <span class="is-mono is-token" title="${escapeHtml(it.fileId)}">${escapeHtml(it.fileId.slice(0, 16))}…</span>` : ""}
-    </div>
-    ${it.warning ? `<div class="is-op-card" data-kind="error"><strong>Något saknas</strong>${escapeHtml(it.warning)}</div>` : ""}
-    <div class="is-actions">
-      <button class="is-btn" id="dlBtn" type="button">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>
-        Ladda ner
-      </button>
-    </div>`;
-  $("#dlBtn").addEventListener("click", () => download(it));
+  resultBody.querySelectorAll("[data-dl]").forEach(b => b.addEventListener("click", () => {
+    const it = items.find(i => i.id === Number(b.dataset.dl)); if (it) download(it);
+  }));
+  resultBody.querySelectorAll("[data-retry]").forEach(b => b.addEventListener("click", () => {
+    const it = items.find(i => i.id === Number(b.dataset.retry)); if (!it) return;
+    it.status = "queued"; it.error = null; it.progress = 0; render();
+  }));
 }
 
 function download(it) {
@@ -258,6 +367,9 @@ function uploadOne(it) {
         const warn = xhr.getResponseHeader("X-Warning");
         it.warning = warn ? decodeURIComponent(warn) : "";
         it.status = "done";
+        // Samma video-id (hash) som en video som redan är klar i listan = dubblett
+        const original = it.fileId && items.find(i => i !== it && i.status === "done" && i.fileId === it.fileId);
+        if (original) markDuplicate(it, original);
       } else {
         let detail = "";
         try {
@@ -281,8 +393,6 @@ function uploadOne(it) {
     it.choice = speakerChoice();               // valet när filen skickas
     fd.append("speakers", it.choice.speakers ? "1" : "0");
     if (it.choice.num) fd.append("num_speakers", String(it.choice.num));
-    fd.append("summary", it.choice.summary ? "1" : "0");
-    fd.append("keywords", it.choice.keywords ? "1" : "0");
     it.status = "uploading"; it.progress = 0; render();
     xhr.send(fd);
   });
@@ -292,13 +402,12 @@ startBtn.addEventListener("click", async () => {
   running = true; render();
   for (const it of items) {
     if (it.status !== "queued") continue;
-    selectedId = it.id;
     await uploadOne(it);
     render();
   }
   running = false; render();
 });
 
-clearBtn.addEventListener("click", () => { items = []; selectedId = null; render(); });
+clearBtn.addEventListener("click", () => { items = []; skippedNote = ""; render(); });
 
 render();
