@@ -10,6 +10,10 @@ Input is the folder made by video_splitter + transcription.transcribe:
 
 A transcript segment goes under the frame that was on screen for most of that segment.
 
+With --speakers the transcript has speaker labels, as written by transcription.diarize:
+"[  12.34 ->   18.90] SPEAKER_00: text". The labels become "Speaker 1", "Speaker 2", ...
+(numbered in the order they first speak) and the text is grouped by speaker.
+
 At the top, a summary (overview + key points) is written by a local model via Ollama
 (see notes/summarize.py). Use --no-summary to skip it.
 
@@ -35,6 +39,8 @@ from urllib.parse import quote
 from .summarize import DEFAULT_MODEL, DEFAULT_URL, Summary, SummaryError, summarize
 
 _SEGMENT_RE = re.compile(r"^\[\s*([\d.]+)\s*->\s*([\d.]+)\]\s?(.*)$")
+# pyannote labels: SPEAKER_00, SPEAKER_01, ... and UNKNOWN when nobody overlaps
+_SPEAKER_RE = re.compile(r"^(SPEAKER_\d+|UNKNOWN):\s*(.*)$")
 
 
 @dataclass
@@ -42,6 +48,7 @@ class Segment:
     start: float
     end: float
     text: str
+    speaker: str | None = None   # e.g. "Speaker 1", when the transcript has labels
 
 
 @dataclass
@@ -57,26 +64,48 @@ def hms(seconds: float) -> str:
     return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
 
 
-def read_frames(timestamps_csv: Path) -> list[Section]:
+def read_frames(timestamps_csv: Path, image_dir: Path | None = None) -> list[Section]:
+    """image_dir: where the frame images are (default: next to timestamps.csv)."""
     with timestamps_csv.open(newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
     if not rows:
         raise ValueError(f"no frames listed in {timestamps_csv}")
-    sections = [Section(float(r["seconds"]), timestamps_csv.parent / r["file"]) for r in rows]
+    image_dir = image_dir or timestamps_csv.parent
+    sections = [Section(float(r["seconds"]), image_dir / r["file"]) for r in rows]
     return sorted(sections, key=lambda s: s.seconds)
 
 
-def read_transcript(path: Path) -> list[Segment]:
+def read_transcript(path: Path, speakers: bool = False) -> list[Segment]:
+    """speakers: lines carry a "SPEAKER_00: " label (from transcription.diarize)."""
     segments = []
+    names: dict[str, str] = {}   # SPEAKER_03 -> "Speaker 1", in order of first speech
     for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
         m = _SEGMENT_RE.match(line)
         if not m:
             raise ValueError(f"{path}:{n}: not a transcript line: {line!r}")
-        if text := m[3].strip():
-            segments.append(Segment(float(m[1]), float(m[2]), text))
+        text, speaker = m[3].strip(), None
+        if speakers and (sm := _SPEAKER_RE.match(text)):
+            label, text = sm[1], sm[2].strip()
+            if label == "UNKNOWN":
+                speaker = "Unknown"
+            else:
+                speaker = names.setdefault(label, f"Speaker {len(names) + 1}")
+        if text:
+            segments.append(Segment(float(m[1]), float(m[2]), text, speaker))
     return segments
+
+
+def speaker_blocks(segments: list[Segment]) -> list[tuple[str | None, str]]:
+    """Join consecutive segments of the same speaker: [(speaker, text), ...]."""
+    blocks: list[tuple[str | None, str]] = []
+    for seg in segments:
+        if blocks and blocks[-1][0] == seg.speaker:
+            blocks[-1] = (seg.speaker, blocks[-1][1] + " " + seg.text)
+        else:
+            blocks.append((seg.speaker, seg.text))
+    return blocks
 
 
 def assign(sections: list[Section], segments: list[Segment]) -> None:
@@ -102,7 +131,10 @@ def assign(sections: list[Section], segments: list[Segment]) -> None:
 
 
 def _link(target: Path, md_dir: Path) -> str:
-    rel = Path(os.path.relpath(target.resolve(), md_dir.resolve())).as_posix()
+    try:
+        rel = Path(os.path.relpath(target.resolve(), md_dir.resolve())).as_posix()
+    except ValueError:  # Windows: image and notes on different drives
+        return target.resolve().as_uri()
     return quote(rel)  # escapes spaces and parentheses, which break Markdown links
 
 
@@ -120,8 +152,12 @@ def render(sections: list[Section], md_path: Path, title: str,
            embed_images: bool = False) -> str:
     md_dir = md_path.parent
     total = video_end if video_end is not None else sections[-1].seconds
-    lines = [f"# {title}", "",
-             f"{len(sections)} frames · {hms(total)} long", ""]
+    speakers = sorted({seg.speaker for sec in sections for seg in sec.segments
+                       if seg.speaker and seg.speaker != "Unknown"})
+    info = f"{len(sections)} frames · {hms(total)} long"
+    if speakers:
+        info += f" · {len(speakers)} speaker{'s' if len(speakers) != 1 else ''}"
+    lines = [f"# {title}", "", info, ""]
 
     if summary:
         lines += ["## Summary", "", summary.overview, "", "### Key points", ""]
@@ -135,23 +171,26 @@ def render(sections: list[Section], md_path: Path, title: str,
                   f"## {i}. {hms(sec.seconds)} – {hms(end)}", "",
                   f"![Frame at {hms(sec.seconds)}]"
                   f"({_data_uri(sec.image) if embed_images else _link(sec.image, md_dir)})", ""]
-        if sec.segments:
-            lines.append(" ".join(seg.text for seg in sec.segments))
-        else:
-            lines.append("_(no speech)_")
-        lines.append("")
+        if not sec.segments:
+            lines += ["_(no speech)_", ""]
+        for speaker, text in speaker_blocks(sec.segments):
+            lines += [f"**{speaker}:** {text}" if speaker else text, ""]
     return "\n".join(lines)
 
 
 def build_notes(split_dir: str | Path, output: str | Path | None = None,
                 transcript: str | Path | None = None, title: str | None = None,
                 summarizer: Callable[[str], Summary | None] | None = None,
-                embed_images: bool = False) -> Path:
+                embed_images: bool = False, frames_dir: str | Path | None = None,
+                speakers: bool = False) -> Path:
     """Write the Markdown file and return its path (default: <split_dir>/notes.md).
 
     summarizer: called with the full transcript text; its Summary goes at the top.
     None = no summary.
     embed_images: put the frames inside the file (base64) instead of linking to them.
+    frames_dir: folder with the frame images, if they were moved away from
+    <split_dir>/frames (timestamps.csv is still read from there).
+    speakers: the transcript has speaker labels (see read_transcript).
     """
     split_dir = Path(split_dir)
     timestamps_csv = split_dir / "frames" / "timestamps.csv"
@@ -164,15 +203,22 @@ def build_notes(split_dir: str | Path, output: str | Path | None = None,
         name = split_dir.resolve().name
         title = name.removesuffix("_split").replace("_", " ")
 
-    sections = read_frames(timestamps_csv)
-    segments = read_transcript(transcript)
+    sections = read_frames(timestamps_csv, Path(frames_dir) if frames_dir else None)
+    segments = read_transcript(transcript, speakers)
     assign(sections, segments)
     video_end = max([sections[-1].seconds] + [s.end for s in segments])
-    summary = summarizer(" ".join(s.text for s in segments)) if summarizer else None
+    summary = summarizer(transcript_text(segments)) if summarizer else None
 
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(render(sections, md_path, title, video_end, summary, embed_images), encoding="utf-8")
     return md_path
+
+
+def transcript_text(segments: list[Segment]) -> str:
+    """Plain text for the summary; one "Speaker 1: ..." line per turn when labelled."""
+    if not any(seg.speaker for seg in segments):
+        return " ".join(seg.text for seg in segments)
+    return "\n".join(f"{spk or 'Unknown'}: {text}" for spk, text in speaker_blocks(segments))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -182,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("-o", "--output", help="Markdown file to write (default: <split_dir>/notes.md)")
     p.add_argument("--transcript", help="transcript file (default: <split_dir>/audio.txt)")
     p.add_argument("--title", help="document title (default: from the folder name)")
+    p.add_argument("--speakers", action="store_true",
+                   help="transcript has speaker labels (from transcription.diarize)")
     p.add_argument("--no-summary", action="store_true", help="don't write a summary at the top")
     p.add_argument("--model", default=DEFAULT_MODEL,
                    help=f"Ollama model for the summary (default: {DEFAULT_MODEL})")
@@ -196,7 +244,8 @@ def main(argv: list[str] | None = None) -> int:
         def summarizer(text):  # noqa: E306
             return summarize(text, model=args.model, url=args.ollama_url, hint=args.hint)
     try:
-        md = build_notes(args.split_dir, args.output, args.transcript, args.title, summarizer)
+        md = build_notes(args.split_dir, args.output, args.transcript, args.title, summarizer,
+                         speakers=args.speakers)
     except (FileNotFoundError, ValueError, SummaryError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         if isinstance(exc, SummaryError):
