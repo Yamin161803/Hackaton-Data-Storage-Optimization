@@ -224,7 +224,7 @@ runBtn.addEventListener("click", async () => {
   running = true; runBtn.disabled = true; emptyBtn.disabled = true;
   setStep(2);
   const label = runBtn.textContent;
-  runBtn.innerHTML = '<span class="is-spinner" aria-hidden="true"></span> Arbetar…';
+  runBtn.innerHTML = '<span class="is-btn-spinner" aria-hidden="true"></span> Arbetar…';
   const t0 = performance.now();
   resultBody.innerHTML = `<div class="is-op-card" data-kind="info"><strong>Analyserar…</strong>
     <span class="is-mono">${escapeHtml(body.target)}</span><br><span id="elapsed">0.0 s</span></div>`;
