@@ -9,11 +9,11 @@ Pipeline:
 Device auto-detected (CUDA float16 if a GPU is present, else CPU int8) for
 faster-whisper; pyannote uses CUDA if torch sees a GPU, else CPU.
 
-HF token is read from the .hf_token file in this folder (or HF_TOKEN env var).
+HF token is read from the .hf_token file in the project root (or HF_TOKEN env var).
 
 Usage:
-    python diarize.py jre_clip.wav --model large-v3
-    python diarize.py meeting.wav --model large-v3 --num-speakers 3
+    python -m transcription.diarize jre_clip.wav --model large-v3
+    python -m transcription.diarize meeting.wav --model large-v3 --num-speakers 3
 """
 import argparse
 import os
@@ -27,7 +27,7 @@ import soundfile as sf
 from faster_whisper import WhisperModel
 from pyannote.audio import Pipeline
 
-HERE = Path(__file__).parent
+HERE = Path(__file__).resolve().parents[2]  # project root
 DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
 
 

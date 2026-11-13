@@ -2,21 +2,21 @@
 """Build a Markdown document from a split video folder: each saved frame followed by
 the transcript spoken while that frame was on screen.
 
-Input is the folder made by video_splitter + transcribe.py:
+Input is the folder made by video_splitter + transcription.transcribe:
     <name>_split/
         frames/timestamps.csv     (from video_splitter)
         frames/frame_*.jpg
-        audio.txt                 (from transcribe.py: "[  12.34 ->   18.90] text")
+        audio.txt                 (from transcription.transcribe: "[  12.34 ->   18.90] text")
 
 A transcript segment goes under the frame that was on screen for most of that segment.
 
 At the top, a summary (overview + key points) is written by a local model via Ollama
-(see summarize.py). Use --no-summary to skip it.
+(see notes/summarize.py). Use --no-summary to skip it.
 
-Examples:
-    python src/meeting_notes.py "data/GraalVMs_Ahead-of-Time_Compilation_(Source)_split"
-    python src/meeting_notes.py data/talk_split -o notes/talk.md --title "My talk"
-    python src/meeting_notes.py data/talk_split --hint "Talk about GraalVM native image"
+Examples (run from the src folder):
+    python -m notes.meeting_notes "../data/GraalVMs_Ahead-of-Time_Compilation_(Source)_split"
+    python -m notes.meeting_notes ../data/talk_split -o talk.md --title "My talk"
+    python -m notes.meeting_notes ../data/talk_split --hint "Talk about GraalVM native image"
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import quote
 
-from summarize import DEFAULT_MODEL, DEFAULT_URL, Summary, SummaryError, summarize
+from .summarize import DEFAULT_MODEL, DEFAULT_URL, Summary, SummaryError, summarize
 
 _SEGMENT_RE = re.compile(r"^\[\s*([\d.]+)\s*->\s*([\d.]+)\]\s?(.*)$")
 

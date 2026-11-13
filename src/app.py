@@ -25,8 +25,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from meeting_notes import build_notes
-from summarize import DEFAULT_MODEL, DEFAULT_URL, Summary, SummaryError, summarize
+from notes.meeting_notes import build_notes
+from notes.summarize import DEFAULT_MODEL, DEFAULT_URL, Summary, SummaryError, summarize
 from video_splitter.splitter import CAMERA_THRESHOLD, DEFAULT_THRESHOLD, MODES, split_video
 
 # default place for the notes: <project>/data/meeting_notes/<video name>.md
@@ -38,7 +38,7 @@ def transcribe_audio(audio: Path, model_name: str, device: str, lang: str | None
     """Write <audio>.txt in the '[start -> end] text' format that meeting_notes reads."""
     from faster_whisper import WhisperModel  # slow import, only needed here
 
-    from transcribe import HAVE_BATCHED, detect_device, transcribe_one
+    from transcription.transcribe import HAVE_BATCHED, detect_device, transcribe_one
 
     def run(device: str, compute_type: str) -> Path:
         print(f"[2/3] transcribing with whisper '{model_name}' on {device} ({compute_type})...")
