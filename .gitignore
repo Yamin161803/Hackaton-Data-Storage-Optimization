@@ -1,3 +1,4 @@
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -6,3 +7,7 @@ __pycache__/
 data/*
 dump/*
 .venv/*
+# Hugging Face model cache (faster-whisper downloads models here)
+models/
+# Audio test clips (too big / disposable)
+*.wav
