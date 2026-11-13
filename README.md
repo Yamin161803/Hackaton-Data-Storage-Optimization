@@ -121,6 +121,51 @@ Output: one `.txt` per input, with `[start -> end]` timestamps per segment.
 The run prints a real-time factor (e.g. `12.3x real-time`) so you can compare
 laptop-CPU vs GPU throughput.
 
+## Document store (PDFs & slide decks) — dedup + versioning + search
+
+`src/store/` stores PDFs and slide decks so that hundreds of thousands of files
+stay searchable and sorted, with heavy deduplication and version tracking.
+
+How it works (see the schema in `src/store/schema.sql`):
+
+- **Exact-duplicate gate.** A document's full-file hash (same fingerprint idea as
+  `src/videohash.py`: size -> quick hash -> full hash) is checked first; an exact
+  duplicate is discarded on ingest.
+- **Page-level dedup.** Each page/slide is content-addressed by a hash of its
+  normalized text + referenced image hashes. A document is stored as an *ordered
+  list of page hashes* (a manifest), never as page content — so a 50-slide deck
+  that shares 48 pages with another only adds 2 new pages.
+- **No overlap threshold.** Shared title/closing slides dedup individually and
+  never force a false "these are the same deck" merge. Identity is *content*,
+  never the filename.
+- **Inverted index** (`page_hash -> document`) makes "which documents share this
+  page?" fast, so version detection only diffs candidates instead of scanning
+  every document.
+- **Version lineage** is recorded in `document_edge` (extends / shortened /
+  reordered / modified). Shortening a deck and re-adding it is kept (not deleted),
+  costs near-zero extra storage, and is recorded as a *shortened* (subset) version.
+
+Extractors (e.g. the PDF/PPTX handlers) produce `store.Page` objects and hand a
+`store.DocumentInput` to `Store.ingest(...)`.
+
+Search and inspect:
+
+```bash
+# keyword search over page/slide text (FTS5), sortable/filterable
+python src/store/search.py find "budget forecast"
+python src/store/search.py find "roadmap" --type pdf --sort date --limit 20
+
+# list documents, sorted by date/size/pages/name
+python src/store/search.py docs --sort size
+python src/store/search.py docs --name "*review*"
+
+# show a document's version relationships
+python src/store/search.py versions <document_id>
+```
+
+Tests: `pytest tests/test_store.py` (exact-dup discard, shared start/end slides
+without false merge, shorten-and-re-add, extend, content-not-filename identity).
+
 ## Notes
 - `.venv/` and model cache are git-ignored.
 - Models download automatically on first use (cached under `~/.cache/huggingface`).
