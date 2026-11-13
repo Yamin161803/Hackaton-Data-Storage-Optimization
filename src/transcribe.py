@@ -18,11 +18,33 @@ Examples:
     python transcribe.py ./recordings --model large-v3 --batched
 """
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
 
-from faster_whisper import WhisperModel
+
+def add_nvidia_dll_dirs() -> None:
+    """Let CTranslate2 find CUDA DLLs installed with pip (nvidia-cublas-cu12, ...).
+
+    On Windows those packages put their DLLs in site-packages/nvidia/<lib>/bin, which is
+    not on the DLL search path, so the GPU fails with e.g. "cublas64_12.dll is not found".
+    """
+    if os.name != "nt":
+        return
+    try:
+        import nvidia
+    except ImportError:
+        return
+    for root in nvidia.__path__:
+        for bin_dir in Path(root).glob("*/bin"):
+            os.add_dll_directory(str(bin_dir))
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+
+
+add_nvidia_dll_dirs()
+
+from faster_whisper import WhisperModel  # noqa: E402
 
 try:
     from faster_whisper import BatchedInferencePipeline
