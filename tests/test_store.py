@@ -244,3 +244,74 @@ def test_pdf_combined_identity_text_and_image_move_together(store):
     # PDF does not do visual-dup flagging; the two pages are simply distinct.
     assert rb.new_pages == 1
     assert rb.visual_duplicates == []
+
+
+# ---------- shared image object store ----------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"fake-png-bytes-A"
+PNG2 = b"\x89PNG\r\n\x1a\n" + b"fake-png-bytes-B"
+JPG = b"\xff\xd8\xff" + b"fake-jpeg-bytes"
+
+
+def test_put_image_dedups_identical_bytes(tmp_path):
+    s = Store(tmp_path / "db", objects_dir=tmp_path / "obj")
+    h1 = s.put_image(PNG)
+    h2 = s.put_image(PNG)          # same bytes again
+    assert h1 == h2
+    # only one image row / one blob on disk
+    assert s.conn.execute("SELECT COUNT(*) FROM image").fetchone()[0] == 1
+    blobs = list((tmp_path / "obj").rglob("*.png"))
+    assert len(blobs) == 1
+    s.close()
+
+
+def test_image_shared_across_many_documents_stored_once(tmp_path):
+    s = Store(tmp_path / "db", objects_dir=tmp_path / "obj")
+    # Simulate 100 PDFs all using the same logo image.
+    h = s.put_image(PNG)
+    for i in range(100):
+        page_hash = f"page{i}"
+        # minimal page row so the FK on page_image is satisfiable
+        s.conn.execute("INSERT INTO page (hash, text) VALUES (?, ?)", (page_hash, f"doc {i}"))
+        s.link_page_images(page_hash, [h])
+    s.conn.commit()
+    assert s.conn.execute("SELECT COUNT(*) FROM image").fetchone()[0] == 1   # one blob
+    assert s.image_refcount(h) == 100                                        # referenced 100x
+    assert len(list((tmp_path / "obj").rglob("*.png"))) == 1
+    s.close()
+
+
+def test_image_format_detected(tmp_path):
+    s = Store(tmp_path / "db", objects_dir=tmp_path / "obj")
+    hp = s.put_image(PNG)
+    hj = s.put_image(JPG)
+    fmt_png = s.conn.execute(
+        "SELECT i.fmt FROM image_hash h JOIN image i ON i.id=h.image_id WHERE h.hash=?",
+        (hp,)).fetchone()[0]
+    fmt_jpg = s.conn.execute(
+        "SELECT i.fmt FROM image_hash h JOIN image i ON i.id=h.image_id WHERE h.hash=?",
+        (hj,)).fetchone()[0]
+    assert fmt_png == 5 and fmt_jpg == 4
+    s.close()
+
+
+def test_reconstruct_returns_text_and_shared_image_paths(tmp_path):
+    s = Store(tmp_path / "db", objects_dir=tmp_path / "obj")
+    img = s.put_image(PNG)
+    # Two 1-slide PDFs sharing the same image; reconstruct each.
+    for name, fh, notes in [("a.pdf", "a" * 64, "page A text"),
+                            ("b.pdf", "b" * 64, "page B text")]:
+        page = Page(text=notes, image_hashes=[img])
+        s.ingest(DocumentInput(full_hash=fh, file_size=1, source_type=SOURCE_PDF,
+                               pages=[page], source_name=name))
+        s.link_page_images(page.hash, [img])
+
+    doc_id = s.conn.execute(
+        "SELECT id FROM document WHERE source_name='a.pdf'").fetchone()[0]
+    rebuilt = s.reconstruct(doc_id)
+    assert len(rebuilt) == 1
+    assert rebuilt[0]["text"] == "page A text"
+    assert rebuilt[0]["images"][0].endswith(".png")
+    # the referenced blob actually exists on disk
+    assert Path(rebuilt[0]["images"][0]).exists()
+    s.close()

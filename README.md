@@ -166,6 +166,29 @@ python src/store/search.py versions <document_id>
 Tests: `pytest tests/test_store.py` (exact-dup discard, shared start/end slides
 without false merge, shorten-and-re-add, extend, content-not-filename identity).
 
+### Slide pictures vs speaker notes (PPTX) and shared image store
+
+- **PPTX** pages carry two sub-identities: `image_hash` (the slide picture) and
+  `text_hash` (the speaker notes). "Same picture, rewritten notes" is reported as
+  a *visual duplicate* (`IngestResult.visual_duplicates`) — a reworded slide,
+  not an unrelated new page. **PDF** keeps a combined text+image identity.
+- **Shared image object store:** pictures from PDFs *and* decks are stored once,
+  content-addressed and sharded on disk under `objects/ab/cd/<hash>`. If 100
+  documents use the same logo, the bytes live on disk once; `page_image` records
+  which pages reference it (so nothing is deleted while referenced). A document
+  can be rebuilt from its text plus the single stored copy of each picture:
+
+  ```python
+  from store import Store, DocumentInput, Page, SOURCE_PDF
+  s = Store("database")
+  img = s.put_image(open("logo.png", "rb").read())   # stored once; returns hash
+  page = Page(text="page text", image_hashes=[img])
+  s.ingest(DocumentInput(full_hash=..., file_size=..., source_type=SOURCE_PDF,
+                         pages=[page], source_name="report.pdf"))
+  s.link_page_images(page.hash, [img])
+  s.reconstruct(doc_id)   # -> [{position, text, images:[paths]}] to remake the doc
+  ```
+
 ## Notes
 - `.venv/` and model cache are git-ignored.
 - Models download automatically on first use (cached under `~/.cache/huggingface`).

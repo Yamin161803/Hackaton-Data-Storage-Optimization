@@ -97,3 +97,39 @@ CREATE VIRTUAL TABLE IF NOT EXISTS page_fts USING fts5(
   text,
   hash UNINDEXED
 );
+
+-- ---------------------------------------------------------------------------
+-- Shared image object store
+-- ---------------------------------------------------------------------------
+-- Pictures from PDFs AND slide decks are stored ONCE, content-addressed, and
+-- referenced by many pages/documents. If 100 PDFs use the same logo, the bytes
+-- are on disk once. This reuses the existing `image` table (id = 8-byte hash as
+-- int, path = file on disk, fmt/size/width/height) created elsewhere in the DB;
+-- we create it here too (IF NOT EXISTS) so the store also works standalone.
+CREATE TABLE IF NOT EXISTS image (
+  id      INTEGER PRIMARY KEY,     -- first 8 bytes of the image's SHA-256, as int64
+  path    TEXT    NOT NULL,        -- where the blob is stored on disk (sharded by hash)
+  fmt     INTEGER NOT NULL,        -- 1=avif 2=jxl 3=webp 4=jpeg 5=png (0=unknown)
+  size    INTEGER NOT NULL,        -- blob size in bytes
+  width   INTEGER,
+  height  INTEGER
+);
+
+-- Full hex hash per image id (the `image` table only keeps the 8-byte int id;
+-- we keep the full SHA-256 hex so page.image_hash values map to image rows).
+CREATE TABLE IF NOT EXISTS image_hash (
+  hash      TEXT    PRIMARY KEY,   -- full SHA-256 hex of the image bytes
+  image_id  INTEGER NOT NULL REFERENCES image(id) ON DELETE CASCADE
+);
+
+-- Reference bookkeeping: which images each page uses (a page can have several).
+-- This is what reconstruction walks (document -> pages -> images) and what
+-- tells us an image is still referenced (don't delete while referenced).
+CREATE TABLE IF NOT EXISTS page_image (
+  page_hash  TEXT    NOT NULL REFERENCES page(hash) ON DELETE CASCADE,
+  image_hash TEXT    NOT NULL,     -- full SHA-256 hex (-> image_hash.hash -> image.id)
+  position   INTEGER NOT NULL DEFAULT 0,  -- order of the image within the page
+  PRIMARY KEY (page_hash, position)
+) WITHOUT ROWID;
+
+CREATE INDEX IF NOT EXISTS idx_page_image_image ON page_image(image_hash);
