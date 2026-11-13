@@ -1,32 +1,35 @@
-"""CLI: python -m video_splitter input.mp4 [-o out_dir] [--every N | --fps N]
+"""CLI: python -m video_splitter input.mp4 [-o out_dir] [--threshold 0-1]
 [--image-format png] [--audio-format mp3]"""
 
 import argparse
 import sys
 from pathlib import Path
 
-from .splitter import AUDIO_FORMATS, DEFAULT_EVERY, IMAGE_FORMATS, split_video
+from .splitter import AUDIO_FORMATS, DEFAULT_THRESHOLD, IMAGE_FORMATS, split_video
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="video_splitter", description="Split a video into image frames and an audio file."
+        prog="video_splitter",
+        description="Split a video into key frames and an audio file. The first frame is "
+                    "saved, then a new frame whenever the picture changes a lot compared "
+                    "with the last saved frame.",
     )
     parser.add_argument("video", type=Path, help="input video, e.g. clip.mp4")
     parser.add_argument("-o", "--output", type=Path,
                         help="output folder (default: <video name>_split next to the video)")
-    sampling = parser.add_mutually_exclusive_group()
-    sampling.add_argument("--every", type=int,
-                          help=f"keep 1 frame out of every N (default: {DEFAULT_EVERY}; 1 = all frames)")
-    sampling.add_argument("--fps", type=float, help="instead of --every: frames per second to extract")
+    parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
+                        help="how much of the picture (0-1) must change to count as a big change "
+                             f"(default: {DEFAULT_THRESHOLD:g} = {DEFAULT_THRESHOLD * 100:g}%%); "
+                             "lower = more frames")
     parser.add_argument("--image-format", choices=IMAGE_FORMATS, default="jpg")
     parser.add_argument("--audio-format", choices=tuple(AUDIO_FORMATS), default="wav")
     args = parser.parse_args(argv)
 
     output = args.output or args.video.with_name(f"{args.video.stem}_split")
     try:
-        result = split_video(args.video, output, args.fps, args.image_format, args.audio_format,
-                             every=args.every)
+        result = split_video(args.video, output, args.image_format, args.audio_format,
+                             threshold=args.threshold)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
