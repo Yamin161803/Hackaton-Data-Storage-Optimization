@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 IMAGE_FORMATS = ("jpg", "png")
+DEFAULT_EVERY = 30  # keep 1 frame out of every 30 unless told otherwise
 AUDIO_FORMATS = {
     "wav": ["-c:a", "pcm_s16le"],
     "mp3": ["-c:a", "libmp3lame", "-q:a", "2"],
@@ -96,13 +97,17 @@ def split_video(
     fps: float | None = None,
     image_format: str = "jpg",
     audio_format: str = "wav",
+    every: int | None = None,
 ) -> SplitResult:
     """Write frames to <output_dir>/frames/ and audio to <output_dir>/audio.<ext>.
 
     Each frame file is named with its index and timestamp, e.g.
     frame_000042_00h00m41.000s.jpg, and <output_dir>/frames/timestamps.csv lists them all.
 
-    fps: frames per second to extract; None keeps every frame of the video.
+    every: keep 1 frame out of every N video frames (frames 1, N+1, 2N+1, ...).
+           Defaults to 30; use 1 for all frames.
+    fps:   alternative to `every`: sample this many frames per second of video.
+           Can't be combined with `every`.
     """
     video = Path(video)
     output_dir = Path(output_dir)
@@ -114,6 +119,12 @@ def split_video(
         raise ValueError(f"audio_format must be one of {tuple(AUDIO_FORMATS)}")
     if fps is not None and fps <= 0:
         raise ValueError("fps must be positive")
+    if fps is not None and every is not None:
+        raise ValueError("use either fps or every, not both")
+    if every is None and fps is None:
+        every = DEFAULT_EVERY
+    if every is not None and every < 1:
+        raise ValueError("every must be 1 or more")
 
     ffmpeg = find_ffmpeg()
     frames_dir = output_dir / "frames"
@@ -124,7 +135,12 @@ def split_video(
             old.unlink()
 
     # showinfo (last in the filter chain) logs the pts_time of every frame that gets written.
-    vf = f"fps={fps},showinfo" if fps is not None else "showinfo"
+    if fps is not None:
+        vf = f"fps={fps},showinfo"
+    elif every > 1:
+        vf = f"select=not(mod(n\\,{every})),showinfo"  # n is the 0-based input frame number
+    else:
+        vf = "showinfo"
     frame_cmd = [ffmpeg, "-hide_banner", "-nostats", "-loglevel", "info", "-y",
                  "-i", str(video), "-an", "-vf", vf]
     if fps is None:
