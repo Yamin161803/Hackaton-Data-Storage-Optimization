@@ -24,8 +24,10 @@ Man ska kunna skanna en ny video, jämföra den med alla andra videor vi sparat,
 För videor:
  * Hasha videon, få sträng av bokstäver, använd hash som nyckelvärde när vi lagrar videon
 
-
-
+Kan vara bra att skriva ner vilka som deltagit i gruppmöten.
+ * Kanske går att göra automatiskt
+ * Vore bra om det går att få tag på enkelt.
+ * Bildigenkänning av medlemmar?
 
 
 
