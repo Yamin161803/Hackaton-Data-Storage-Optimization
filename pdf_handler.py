@@ -16,11 +16,8 @@ Usage:
     python pdf_to_markdown.py input.pdf --out output_folder
 
 ToDo:
- - Large systems can have billios of unique images.
- - 
-
-
-
+ - Large systems can have billios of unique images, so we want tags to separate them and speed up search.
+ - Move hashes to metadata and try to keep original file name
 
 """
 
