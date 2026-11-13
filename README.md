@@ -4,7 +4,7 @@ Speech-to-text for meeting video recordings using **faster-whisper**.
 Goal: compress a large volume of videos into text transcripts, prioritizing
 **speed + accuracy**.
 
-The transcription script (`transcribe.py`) **auto-detects the device**:
+The transcription script (`src/transcription/transcribe.py`) **auto-detects the device**:
 - GPU present  → `cuda` + `float16` (production, e.g. RTX 3070)
 - No GPU       → `cpu` + `int8` (laptop testing — current setup)
 
@@ -48,21 +48,22 @@ roughly 10–15x real-time. Use `--batched` for a further 3–4x on many/long fi
 
 ```bash
 source .venv/bin/activate
+cd src
 
 # Quick sanity check on a laptop (seconds):
-python transcribe.py meeting.mp4 --model base
+python -m transcription.transcribe meeting.mp4 --model base
 
 # Full quality (auto GPU if present, else CPU):
-python transcribe.py meeting.mp4 --model large-v3
+python -m transcription.transcribe meeting.mp4 --model large-v3
 
 # Whole folder of recordings -> a .txt next to each:
-python transcribe.py ./recordings --model large-v3
+python -m transcription.transcribe ./recordings --model large-v3
 
 # Batched (big GPU speedup for high volume):
-python transcribe.py ./recordings --model large-v3 --batched
+python -m transcription.transcribe ./recordings --model large-v3 --batched
 
 # Force a language to skip auto-detect (en, sv, ...):
-python transcribe.py meeting.mp4 --model large-v3 --lang en
+python -m transcription.transcribe meeting.mp4 --model large-v3 --lang en
 ```
 
 Output: one `.txt` per input, with `[start -> end]` timestamps per segment.
