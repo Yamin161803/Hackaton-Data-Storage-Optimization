@@ -7,15 +7,15 @@ Device is auto-detected:
 
 You can override with --device / --compute-type.
 
-Examples:
+Examples (run from the src folder):
     # Single file, quick sanity check on a laptop
-    python transcribe.py meeting.mp4 --model base
+    python -m transcription.transcribe meeting.mp4 --model base
 
     # Single file, full quality (auto picks GPU if available)
-    python transcribe.py meeting.mp4 --model large-v3
+    python -m transcription.transcribe meeting.mp4 --model large-v3
 
     # Whole folder of videos -> .txt next to each, batched on GPU
-    python transcribe.py ./recordings --model large-v3 --batched
+    python -m transcription.transcribe ./recordings --model large-v3 --batched
 """
 import argparse
 import os

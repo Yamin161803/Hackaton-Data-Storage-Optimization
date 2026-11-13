@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from meeting_notes import build_notes, hms, read_transcript  # noqa: E402
+from notes.meeting_notes import build_notes, hms, read_transcript  # noqa: E402
 
 
 def make_split_dir(root: Path, frame_times, transcript: str) -> Path:
@@ -108,8 +108,8 @@ import io  # noqa: E402
 import json  # noqa: E402
 import urllib.error  # noqa: E402
 
-import summarize as summarize_mod  # noqa: E402
-from summarize import Summary, SummaryError, summarize  # noqa: E402
+import notes.summarize as summarize_mod  # noqa: E402
+from notes.summarize import Summary, SummaryError, summarize  # noqa: E402
 
 
 def test_summary_is_written_at_the_top(tmp_path):
