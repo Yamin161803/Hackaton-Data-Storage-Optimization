@@ -7,22 +7,44 @@ Device is auto-detected:
 
 You can override with --device / --compute-type.
 
-Examples:
+Examples (run from the src folder):
     # Single file, quick sanity check on a laptop
-    python transcribe.py meeting.mp4 --model base
+    python -m transcription.transcribe meeting.mp4 --model base
 
     # Single file, full quality (auto picks GPU if available)
-    python transcribe.py meeting.mp4 --model large-v3
+    python -m transcription.transcribe meeting.mp4 --model large-v3
 
     # Whole folder of videos -> .txt next to each, batched on GPU
-    python transcribe.py ./recordings --model large-v3 --batched
+    python -m transcription.transcribe ./recordings --model large-v3 --batched
 """
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
 
-from faster_whisper import WhisperModel
+
+def add_nvidia_dll_dirs() -> None:
+    """Let CTranslate2 find CUDA DLLs installed with pip (nvidia-cublas-cu12, ...).
+
+    On Windows those packages put their DLLs in site-packages/nvidia/<lib>/bin, which is
+    not on the DLL search path, so the GPU fails with e.g. "cublas64_12.dll is not found".
+    """
+    if os.name != "nt":
+        return
+    try:
+        import nvidia
+    except ImportError:
+        return
+    for root in nvidia.__path__:
+        for bin_dir in Path(root).glob("*/bin"):
+            os.add_dll_directory(str(bin_dir))
+            os.environ["PATH"] = str(bin_dir) + os.pathsep + os.environ.get("PATH", "")
+
+
+add_nvidia_dll_dirs()
+
+from faster_whisper import WhisperModel  # noqa: E402
 
 try:
     from faster_whisper import BatchedInferencePipeline

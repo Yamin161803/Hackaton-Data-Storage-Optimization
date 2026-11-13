@@ -3,6 +3,12 @@
 Frame selection: the first frame is always saved. After that, a frame is saved only
 when it differs enough from the last saved frame (a "big change", e.g. a new slide).
 
+Presentation vs camera: in a slide video the picture is still almost all the time, while
+in camera footage (faces, people moving) consecutive frames differ nearly every frame.
+The splitter measures how often that happens ("motion"). If it is often, the video is
+treated as camera footage and a much higher threshold is used, so only real scene
+changes are kept instead of one frame for every head movement.
+
 This runs in two passes over the video:
   1. ffmpeg decodes every frame to a tiny grayscale image; Python compares each one
      with the last saved frame and picks which frames to keep.
@@ -32,6 +38,14 @@ AUDIO_FORMATS = {
 
 # fraction of the picture that must change (0.05 = 5 %)
 DEFAULT_THRESHOLD = 0.05
+# threshold used instead when the video looks like camera footage
+CAMERA_THRESHOLD = 0.40
+# Two consecutive frames "differ" when more than this share of the picture changed.
+MOTION_CHANGE = 0.005
+# If at least this share of consecutive frame pairs differ, it is camera footage.
+# (Measured: slide talk 0.2 %, camera footage 53 %.)
+CAMERA_MOTION = 0.10
+MODES = ("auto", "presentation", "camera")
 
 # Frames are compared at this size, which ignores compression noise and tiny details.
 _CMP_W, _CMP_H = 160, 90
@@ -58,6 +72,9 @@ class SplitResult:
     audio_path: Path | None  # None when the video has no audio stream
     timestamps_csv: Path
     frames: list[Frame] = field(default_factory=list)
+    mode: str = "presentation"   # "presentation" or "camera"
+    motion: float = 0.0          # share of consecutive frame pairs that differ
+    threshold: float = DEFAULT_THRESHOLD  # the threshold that was used
 
     @property
     def frame_count(self) -> int:
@@ -103,6 +120,16 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg failed:\n{proc.stderr.strip()[-2000:]}")
     return proc
+
+
+def has_video(path: Path, ffmpeg: str) -> bool:
+    """True when the file has a real video stream (cover art in an MP3 doesn't count)."""
+    proc = subprocess.run(
+        [ffmpeg, "-hide_banner", "-i", str(path)],
+        capture_output=True, text=True, errors="replace",
+    )
+    return any("attached pic" not in line
+               for line in re.findall(r"Stream #\S+.*: Video:.*", proc.stderr))
 
 
 def has_audio(video: Path, ffmpeg: str) -> bool:
@@ -155,8 +182,35 @@ class _TimestampReader(threading.Thread):
             return self._times.pop(n)
 
 
-def _pick_frames(video: Path, ffmpeg: str, threshold: float):
-    """Pass 1. Returns [(frame_number, seconds, reason, change)], frame_number 0-based."""
+class _Picker:
+    """Keeps a frame when it differs from the last kept frame by >= threshold."""
+
+    def __init__(self, threshold: float):
+        self.threshold = threshold
+        self.picked: list[tuple[int, float, str, float]] = []
+        self._last = None
+
+    def feed(self, n: int, t: float, img: np.ndarray) -> None:
+        if self._last is None:
+            self.picked.append((n, t, "first", 0.0))
+            self._last = img
+        elif (change := change_ratio(img, self._last)) >= self.threshold:
+            self.picked.append((n, t, "change", change))
+            self._last = img
+
+
+@dataclass
+class _Scan:
+    presentation: list   # picks with the normal threshold
+    camera: list         # picks with the camera threshold
+    motion: float        # share of consecutive frame pairs that differ
+
+
+def _scan_frames(video: Path, ffmpeg: str, threshold: float, camera_threshold: float) -> _Scan:
+    """Pass 1: one decode gives the picks for both thresholds and the motion measurement.
+
+    Picks are [(frame_number, seconds, reason, change)], frame_number 0-based.
+    """
     cmd = [ffmpeg, "-hide_banner", "-nostats", "-loglevel", "info", "-i", str(video), "-an",
            "-vf", f"showinfo,scale={_CMP_W}:{_CMP_H}:flags=area,format=gray",
            "-fps_mode", "passthrough", "-f", "rawvideo", "-"]
@@ -166,19 +220,19 @@ def _pick_frames(video: Path, ffmpeg: str, threshold: float):
     reader = _TimestampReader(proc.stderr)
     reader.start()
 
-    picked = []
-    last_img = None
+    normal, camera = _Picker(threshold), _Picker(camera_threshold)
+    prev = None
+    moving = 0
     n = 0
     try:
         while len(buf := proc.stdout.read(size)) == size:
             img = np.frombuffer(buf, dtype=np.uint8)
             t = reader.get(n)
-            if last_img is None:
-                picked.append((n, t, "first", 0.0))
-                last_img = img
-            elif (change := change_ratio(img, last_img)) >= threshold:
-                picked.append((n, t, "change", change))
-                last_img = img
+            if prev is not None and change_ratio(img, prev) > MOTION_CHANGE:
+                moving += 1
+            prev = img
+            normal.feed(n, t, img)
+            camera.feed(n, t, img)
             n += 1
     finally:
         proc.stdout.close()
@@ -186,9 +240,10 @@ def _pick_frames(video: Path, ffmpeg: str, threshold: float):
         reader.join()
     if returncode != 0:
         raise RuntimeError("ffmpeg failed:\n" + "".join(reader.tail).strip())
-    if not picked:
+    if n == 0:
         raise RuntimeError("no video frames found")
-    return picked
+    motion = moving / (n - 1) if n > 1 else 0.0
+    return _Scan(normal.picked, camera.picked, motion)
 
 
 def split_video(
@@ -197,11 +252,17 @@ def split_video(
     image_format: str = "jpg",
     audio_format: str = "wav",
     threshold: float = DEFAULT_THRESHOLD,
+    mode: str = "auto",
+    camera_threshold: float = CAMERA_THRESHOLD,
 ) -> SplitResult:
     """Save key frames to <output_dir>/frames/ and audio to <output_dir>/audio.<ext>.
 
     The first frame is always saved; after that a frame is saved only when at least
     `threshold` (0-1) of the picture differs from the last saved frame.
+
+    mode: "auto" checks how often consecutive frames differ; if often (camera footage,
+    faces) `camera_threshold` is used instead of `threshold`. "presentation" / "camera"
+    force one of them.
 
     Frame files are named by timestamp, e.g. frame_00h00m41.000s.jpg, and
     <output_dir>/frames/timestamps.csv lists them with the reason each was saved.
@@ -216,9 +277,19 @@ def split_video(
         raise ValueError(f"audio_format must be one of {tuple(AUDIO_FORMATS)}")
     if not 0 < threshold <= 1:
         raise ValueError("threshold must be between 0 and 1")
+    if not 0 < camera_threshold <= 1:
+        raise ValueError("camera_threshold must be between 0 and 1")
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
+    # camera footage should never use a lower threshold than the one asked for
+    camera_threshold = max(camera_threshold, threshold)
 
     ffmpeg = find_ffmpeg()
-    picked = _pick_frames(video, ffmpeg, threshold)
+    scan = _scan_frames(video, ffmpeg, threshold, camera_threshold)
+    if mode == "auto":
+        mode = "camera" if scan.motion >= CAMERA_MOTION else "presentation"
+    picked = scan.camera if mode == "camera" else scan.presentation
+    used_threshold = camera_threshold if mode == "camera" else threshold
 
     frames_dir = output_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
@@ -273,4 +344,5 @@ def split_video(
         ])
 
     return SplitResult(frames_dir=frames_dir, audio_path=audio_path,
-                       timestamps_csv=timestamps_csv, frames=frames)
+                       timestamps_csv=timestamps_csv, frames=frames,
+                       mode=mode, motion=scan.motion, threshold=used_threshold)
