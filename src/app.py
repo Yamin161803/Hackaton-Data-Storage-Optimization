@@ -27,19 +27,25 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
-from notes.meeting_notes import build_notes
+from notes.meeting_notes import VideoInfo, build_notes
 from notes.summarize import DEFAULT_MODEL, DEFAULT_URL, Summary, SummaryError, summarize
-from video_splitter.splitter import CAMERA_THRESHOLD, DEFAULT_THRESHOLD, MODES, split_video
+from video_splitter.splitter import (CAMERA_THRESHOLD, DEFAULT_THRESHOLD, MODES,
+                                     find_ffmpeg, has_video, split_video)
+from videohash import fingerprint, video_id
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 # notes: data/meeting_notes/<video name>.md, frames: data/resources/<video name>/
 NOTES_DIR = DATA_DIR / "meeting_notes"
 RESOURCES_DIR = DATA_DIR / "resources"
+# audio-only files (no video track): one part of the notes per this many seconds
+AUDIO_PART_SECONDS = 300
 
 
 def transcribe_audio(audio: Path, model_name: str, device: str, lang: str | None,
@@ -107,14 +113,34 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
     if not video.is_file():
         raise FileNotFoundError(video)
 
+    print(f"[0/3] hashing {video.name}...")
+    fp = fingerprint(video)
+    vid, method = video_id(video)
+    info = VideoInfo(video.name, vid, method, fp.file_size,
+                     fp.quick_hash, fp.quick_hash_method, fp.full_hash, fp.full_hash_algorithm)
+    print(f"      {fp.file_size} bytes, quick hash {fp.quick_hash[:16]}..., "
+          f"full hash {fp.full_hash[:16]}..., video id {vid} ({method})")
+
     with tempfile.TemporaryDirectory(prefix="video_notes_") as tmp:
         work = Path(tmp)
 
-        print(f"[1/3] finding key frames and extracting audio from {video.name}...")
-        split = split_video(video, work, "jpg", "wav", threshold=threshold, mode=mode,
-                            camera_threshold=camera_threshold)
-        print(f"      {split.mode} video ({split.motion:.0%} of frames moving, "
-              f"threshold {split.threshold:g}): {split.frame_count} frames")
+        ffmpeg = find_ffmpeg()
+        audio_only = not has_video(video, ffmpeg)
+        if audio_only:
+            # e.g. a podcast MP3: no frames, the notes get a part every AUDIO_PART_SECONDS
+            print(f"[1/3] {video.name} has no video: audio only, "
+                  f"a part every {AUDIO_PART_SECONDS // 60} minutes")
+            audio = work / "audio.wav"
+            subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                            "-i", str(video), "-vn", "-ac", "1", "-ar", "16000",
+                            "-c:a", "pcm_s16le", str(audio)], check=True)
+            split = SimpleNamespace(audio_path=audio, frames=[])
+        else:
+            print(f"[1/3] finding key frames and extracting audio from {video.name}...")
+            split = split_video(video, work, "jpg", "wav", threshold=threshold, mode=mode,
+                                camera_threshold=camera_threshold)
+            print(f"      {split.mode} video ({split.motion:.0%} of frames moving, "
+                  f"threshold {split.threshold:g}): {split.frame_count} frames")
 
         labelled = False
         if split.audio_path:
@@ -145,7 +171,7 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
                 return None
 
         frames_dir = None
-        if not embed_images:
+        if not embed_images and not audio_only:
             frames_dir = save_frames(split.frames,
                                      Path(resources_dir or RESOURCES_DIR) / video.stem)
             print(f"      frames -> {frames_dir}")
@@ -153,7 +179,8 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
         print("[3/3] writing notes...")
         return build_notes(work, output=output, title=video.stem.replace("_", " "),
                            summarizer=summarizer, embed_images=embed_images,
-                           frames_dir=frames_dir, speakers=labelled)
+                           frames_dir=frames_dir, speakers=labelled, video=info,
+                           part_seconds=AUDIO_PART_SECONDS if audio_only else None)
 
 
 def save_frames(frames, dest: Path) -> Path:

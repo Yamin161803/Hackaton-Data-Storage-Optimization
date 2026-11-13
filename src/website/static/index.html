@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Filkomprimering</title>
+<title>Videoanteckningar</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -13,7 +13,7 @@
 
 <header class="is-header">
   <div class="is-header__inner">
-    <a class="is-home" href="#" aria-label="Filkomprimering, startsida">
+    <a class="is-home" href="#" aria-label="Videoanteckningar, startsida">
       <!-- Svart SVG som visas vit via filter: invert(1). Byt mot er egen logotyp. -->
       <svg class="is-logo" viewBox="0 0 44 44" aria-hidden="true">
         <rect x="6" y="6" width="32" height="32" rx="9" fill="none" stroke="#000" stroke-width="3"/>
@@ -21,8 +21,8 @@
       </svg>
       <span class="is-divider" aria-hidden="true"></span>
       <span>
-        <span class="is-header__title">Filkomprimering</span><br>
-        <span class="is-header__sub">Ladda upp, komprimera, ladda ner</span>
+        <span class="is-header__title">Videoanteckningar</span><br>
+        <span class="is-header__sub">Ladda upp en video, få anteckningar</span>
       </span>
     </a>
     <span class="is-header__spacer"></span>
@@ -35,11 +35,11 @@
 
 <main>
   <section class="is-hero anim">
-    <h1>Komprimera filer på några sekunder</h1>
-    <p>Släpp en eller flera filer här. De skickas till komprimeringstjänsten och du får tillbaka en mindre fil att ladda ner.</p>
+    <h1>Gör om videor till anteckningar</h1>
+    <p>Släpp en eller flera videor här. Varje video blir en liten Markdown-fil med bildrutor, vad som sades och en sammanfattning.</p>
     <ol class="is-steps" aria-label="Förlopp">
       <li class="is-step is-active" data-step="1"><span class="is-step__n">1</span>Välj filer</li>
-      <li class="is-step" data-step="2"><span class="is-step__n">2</span>Komprimera</li>
+      <li class="is-step" data-step="2"><span class="is-step__n">2</span>Skapa anteckningar</li>
       <li class="is-step" data-step="3"><span class="is-step__n">3</span>Ladda ner</li>
     </ol>
   </section>
@@ -53,11 +53,11 @@
       </h2>
 
       <label class="is-drop is-graph-surface" id="dropZone" tabindex="0">
-        <input type="file" id="fileInput" multiple>
+        <input type="file" id="fileInput" multiple accept="video/*,.mkv,.m4v">
         <span class="is-drop__icon" aria-hidden="true">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 18v-6M9 15l3-3 3 3"/></svg>
         </span>
-        <span class="is-drop__title">Dra hit filer eller klicka för att välja</span>
+        <span class="is-drop__title">Dra hit videor eller klicka för att välja</span>
         <span class="is-drop__hint" id="limitHint"></span>
       </label>
 
@@ -65,10 +65,22 @@
         <div class="is-empty" id="emptyState">Inga filer valda än.</div>
       </div>
 
+      <fieldset class="is-options" id="speakerOptions">
+        <label class="is-check">
+          <input type="checkbox" id="speakersInput">
+          <span>Visa vem som pratar</span>
+        </label>
+        <label class="is-number" id="numSpeakersLabel">
+          Antal talare
+          <input type="number" id="numSpeakersInput" min="1" max="20" placeholder="auto" inputmode="numeric">
+        </label>
+        <p class="is-options__hint">Tar längre tid: talarna identifieras på datorns processor.</p>
+      </fieldset>
+
       <div class="is-actions">
         <button class="is-btn" id="startBtn" type="button" disabled>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></svg>
-          Komprimera
+          Skapa anteckningar
         </button>
         <button class="is-btn is-btn--ghost" id="clearBtn" type="button" disabled>Rensa listan</button>
       </div>

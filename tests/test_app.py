@@ -59,7 +59,18 @@ def test_make_notes_saves_notes_and_frames(tmp_path, fake_transcribe, resources_
     assert sorted(p.name for p in tmp_path.iterdir()) == [
         "My_talk.mp4", "meeting_notes", "resources"]
     text = md.read_text(encoding="utf-8")
-    assert text.startswith("# My talk\n")
+    # notes start with the video's fingerprint: size, quick hash, full hash
+    import hashlib
+    full = hashlib.sha256(video.read_bytes()).hexdigest()
+    head = text.split("\n---\n", 1)[0].splitlines()
+    assert head[0] == "---"
+    assert head[1] == f"file_size: {video.stat().st_size}"
+    assert head[2].startswith("quick_hash: ") and len(head[2]) == len("quick_hash: ") + 64
+    assert head[3] == "quick_hash_method: sha256-size-first-last-1MiB"
+    assert head[4] == f"full_hash: {full}"
+    assert head[5] == "full_hash_algorithm: sha256"
+    assert head[6] == 'video: "My_talk.mp4"' and head[7].startswith("video_id: ")
+    assert "\n---\n\n# My talk\n" in text
     assert "base64" not in text
     one, two = text.split("## 1.")[1].split("## 2.")
     assert "First slide talk." in one and "Second slide talk." in two
@@ -139,8 +150,8 @@ def test_make_notes_passes_mode_to_splitter(tmp_path, fake_transcribe):
     video = make_video(tmp_path / "v.mp4", [("black", 2), (f"black,{BOX}", 2)])
     slides = app.make_notes(video, tmp_path / "a.md", summary=False, mode="presentation")
     camera = app.make_notes(video, tmp_path / "b.md", summary=False, mode="camera")
-    assert slides.read_text(encoding="utf-8").startswith("# v\n\n2 frames")
-    assert camera.read_text(encoding="utf-8").startswith("# v\n\n1 frames")
+    assert "\n# v\n\n2 frames" in slides.read_text(encoding="utf-8")
+    assert "\n# v\n\n1 frames" in camera.read_text(encoding="utf-8")
 
 
 def test_make_notes_missing_video(tmp_path):
@@ -353,3 +364,50 @@ def test_chunks():
     assert _chunks("a b c d e", 2) == ["a b", "c d", "e"]
     assert _chunks("a  b\n c", 10) == ["a b c"]
     assert _chunks("   ", 5) == [""]
+
+
+# ---------- audio-only files (e.g. a podcast MP3) ----------
+
+def make_audio(path: Path, seconds: int = 3) -> Path:
+    from video_splitter.splitter import find_ffmpeg
+    import subprocess
+    subprocess.run([find_ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i",
+                    f"sine=frequency=440:duration={seconds}", "-c:a", "aac", str(path)],
+                   check=True)
+    return path
+
+
+def test_has_video(tmp_path):
+    from video_splitter.splitter import find_ffmpeg, has_video
+    assert has_video(make_video(tmp_path / "v.mp4", [("black", 1)]), find_ffmpeg())
+    assert not has_video(make_audio(tmp_path / "a.m4a"), find_ffmpeg())
+
+
+def test_audio_only_file_gives_notes_in_parts(tmp_path, monkeypatch, resources_in_tmp):
+    def fake(audio, model_name, device, lang, batched):
+        out = audio.with_suffix(".txt")
+        out.write_text("[   0.00 ->    5.00] Welcome to the show.\n"
+                       "[ 290.00 ->  320.00] Crossing the five minute mark.\n"
+                       "[ 650.00 ->  655.00] Late in the episode.\n", encoding="utf-8")
+        return out
+    monkeypatch.setattr(app, "transcribe_audio", fake)
+    podcast = make_audio(tmp_path / "Podcast #1.m4a")
+
+    md = app.make_notes(podcast, tmp_path / "notes" / "p.md", summary=False)
+
+    text = md.read_text(encoding="utf-8")
+    assert "audio only · 3 parts · 00:10:55 long" in text
+    assert "![" not in text and not resources_in_tmp.exists()     # no frames anywhere
+    assert "## 1. 00:00:00 – 00:05:00" in text and "## 3. 00:10:00 – 00:10:55" in text
+    one, two = text.split("## 2.")[0], text.split("## 2.")[1].split("## 3.")[0]
+    assert "Welcome to the show." in one
+    assert "Crossing the five minute mark." in two                 # mostly after 5:00
+    assert text.startswith("---\nfile_size: ")                     # fingerprint too
+
+
+def test_build_notes_parts_without_frames(tmp_path):
+    split = tmp_path / "s"
+    split.mkdir()
+    (split / "audio.txt").write_text("[   0.00 ->    1.00] Hi.\n", encoding="utf-8")
+    text = meeting_notes.build_notes(split, part_seconds=300).read_text(encoding="utf-8")
+    assert "audio only · 1 parts" in text and "Hi." in text and "![" not in text
