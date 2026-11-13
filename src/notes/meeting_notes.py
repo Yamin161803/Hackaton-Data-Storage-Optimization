@@ -10,12 +10,15 @@ Input is the folder made by video_splitter + transcription.transcribe:
 
 A transcript segment goes under the frame that was on screen for most of that segment.
 
-Video identity: when the video's hash id is given (see videohash.py), it is written at the
-top of the notes as front matter, so notes can be matched to their video:
+Front matter: the notes start with the recording's fingerprint (see videohash.py), so
+the recording can be found from the notes and the notes from the recording (lookup.py),
+then optional search keywords and the number of speakers:
     ---
-    video: talk.mp4
-    video_id: -4315225046207543519
-    video_id_method: content
+    file_size: 220480662
+    quick_hash: 5cfa...           quick_hash_method: sha256-size-first-last-1MiB
+    full_hash: 5678...            full_hash_algorithm: sha256
+    keywords: ["GraalVM", "native image", ...]     (with --keywords)
+    speakers: 2                                     (with --speakers)
     ---
 
 With --speakers the transcript has speaker labels, as written by transcription.diarize:
@@ -158,15 +161,9 @@ def _data_uri(image: Path) -> str:
 
 @dataclass
 class VideoInfo:
-    """Which video the notes come from (see videohash.py).
-
-    size, quick_hash, full_hash: the file's fingerprint, written first in the notes so
-    the video can be found from the notes and the notes from the video (lookup.py).
-    id: 8-byte content hash from videohash.video_id (metadata ignored).
-    """
-    name: str
-    id: int
-    id_method: str = "content"   # "content" (metadata ignored) or "file" (whole file)
+    """The recording's fingerprint (see videohash.Fingerprint), written first in the
+    notes so the recording can be found from the notes and the notes from the recording
+    (lookup.py)."""
     size: int | None = None      # bytes
     quick_hash: str | None = None
     quick_hash_method: str | None = None
@@ -174,23 +171,24 @@ class VideoInfo:
     full_hash_algorithm: str | None = None
 
 
-def _front_matter(video: VideoInfo, speakers: int = 0) -> list[str]:
-    lines = ["---"]
-    # 1. fingerprint of the file: size, quick hash + method, full hash + algorithm
-    if video.size is not None:
-        lines.append(f"file_size: {video.size}")
-    if video.quick_hash:
-        lines += [f"quick_hash: {video.quick_hash}",
-                  f"quick_hash_method: {video.quick_hash_method}"]
-    if video.full_hash:
-        lines += [f"full_hash: {video.full_hash}",
-                  f"full_hash_algorithm: {video.full_hash_algorithm}"]
-    # 2. name and content id
-    lines += [f"video: {json.dumps(video.name, ensure_ascii=False)}",
-              f"video_id: {video.id}", f"video_id_method: {video.id_method}"]
+def _front_matter(video: VideoInfo | None, speakers: int = 0,
+                  keywords: list[str] | None = None) -> list[str]:
+    lines = []
+    if video:
+        # fingerprint of the file: size, quick hash + method, full hash + algorithm
+        if video.size is not None:
+            lines.append(f"file_size: {video.size}")
+        if video.quick_hash:
+            lines += [f"quick_hash: {video.quick_hash}",
+                      f"quick_hash_method: {video.quick_hash_method}"]
+        if video.full_hash:
+            lines += [f"full_hash: {video.full_hash}",
+                      f"full_hash_algorithm: {video.full_hash_algorithm}"]
+    if keywords:
+        lines.append(f"keywords: {json.dumps(keywords, ensure_ascii=False)}")
     if speakers:
         lines.append(f"speakers: {speakers}")   # notes have speaker labels
-    return lines + ["---", ""]
+    return ["---", *lines, "---", ""] if lines else []
 
 
 _FRONT_MATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.S)
@@ -220,6 +218,23 @@ def read_speaker_count(md_path: str | Path) -> int:
     """How many speakers the notes are labelled with (0 = no speaker labels)."""
     value = read_front_matter(md_path).get("speakers", "")
     return int(value) if value.isdigit() else 0
+
+
+def read_keywords(md_path: str | Path) -> list[str]:
+    """The search keywords in a notes file's front matter ([] if there are none)."""
+    try:
+        words = json.loads(read_front_matter(md_path).get("keywords", "[]"))
+    except json.JSONDecodeError:
+        return []
+    return [str(w) for w in words] if isinstance(words, list) else []
+
+
+def has_summary(md_path: str | Path) -> bool:
+    """Do the notes have a summary section?"""
+    try:
+        return "\n## Summary\n" in Path(md_path).read_text(encoding="utf-8")
+    except OSError:
+        return False
 
 
 def find_notes(notes_dir: str | Path, video_id: int) -> Path | None:
@@ -253,21 +268,14 @@ def embed_local_images(md_text: str, md_dir: str | Path) -> str:
 
 def render(sections: list[Section], md_path: Path, title: str,
            video_end: float | None, summary: Summary | None = None,
-           embed_images: bool = False, video: VideoInfo | None = None) -> str:
+           embed_images: bool = False, video: VideoInfo | None = None,
+           keywords: list[str] | None = None) -> str:
     md_dir = md_path.parent
     total = video_end if video_end is not None else sections[-1].seconds
     speakers = sorted({seg.speaker for sec in sections for seg in sec.segments
                        if seg.speaker and seg.speaker != "Unknown"})
-    if any(sec.image for sec in sections):
-        info = f"{len(sections)} frames · {hms(total)} long"
-    else:
-        info = f"audio only · {len(sections)} parts · {hms(total)} long"
-    if speakers:
-        info += f" · {len(speakers)} speaker{'s' if len(speakers) != 1 else ''}"
-    lines = _front_matter(video, len(speakers)) if video else []
-    lines += [f"# {title}", "", info, ""]
-    if video:
-        lines += [f"Video: `{video.name}` · ID `{video.id}`", ""]
+    lines = _front_matter(video, len(speakers), keywords)
+    lines += [f"# {title}", ""]
 
     if summary:
         lines += ["## Summary", "", summary.overview, "", "### Key points", ""]
@@ -294,16 +302,19 @@ def build_notes(split_dir: str | Path, output: str | Path | None = None,
                 summarizer: Callable[[str], Summary | None] | None = None,
                 embed_images: bool = False, frames_dir: str | Path | None = None,
                 speakers: bool = False, video: VideoInfo | None = None,
-                part_seconds: float | None = None) -> Path:
+                part_seconds: float | None = None,
+                keyworder: Callable[[str], list[str] | None] | None = None) -> Path:
     """Write the Markdown file and return its path (default: <split_dir>/notes.md).
 
     summarizer: called with the full transcript text; its Summary goes at the top.
     None = no summary.
+    keyworder: called with the full transcript text; the search keywords it returns go
+    in the front matter. None = no keywords.
     embed_images: put the frames inside the file (base64) instead of linking to them.
     frames_dir: folder with the frame images, if they were moved away from
     <split_dir>/frames (timestamps.csv is still read from there).
     speakers: the transcript has speaker labels (see read_transcript).
-    video: which video the notes come from; its hash id goes at the top of the notes.
+    video: the recording's fingerprint; it goes at the top of the notes.
     part_seconds: audio-only recordings (no frames): split the text into parts of this
     many seconds instead of one part per frame; frames/timestamps.csv is not needed.
     """
@@ -328,11 +339,13 @@ def build_notes(split_dir: str | Path, output: str | Path | None = None,
         sections = read_frames(timestamps_csv, Path(frames_dir) if frames_dir else None)
     assign(sections, segments)
     video_end = max([sections[-1].seconds] + [s.end for s in segments])
-    summary = summarizer(transcript_text(segments)) if summarizer else None
+    text = transcript_text(segments)
+    summary = summarizer(text) if summarizer else None
+    keywords = (keyworder(text) or None) if keyworder else None
 
     md_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.write_text(render(sections, md_path, title, video_end, summary, embed_images,
-                              video), encoding="utf-8")
+                              video, keywords), encoding="utf-8")
     return md_path
 
 
