@@ -27,7 +27,7 @@ def make_video(path: Path, with_audio: bool = True) -> Path:
 
 def test_splits_all_frames_and_audio(tmp_path):
     video = make_video(tmp_path / "clip.mp4")
-    result = split_video(video, tmp_path / "out")
+    result = split_video(video, tmp_path / "out", every=1)
     assert result.frame_count == 20
     assert (result.frames_dir / "frame_000001_00h00m00.000s.jpg").is_file()
     assert result.audio_path == tmp_path / "out" / "audio.wav"
@@ -36,7 +36,7 @@ def test_splits_all_frames_and_audio(tmp_path):
 
 def test_frames_have_timestamps(tmp_path):
     video = make_video(tmp_path / "clip.mp4")  # 10 fps -> one frame every 0.1 s
-    result = split_video(video, tmp_path / "out")
+    result = split_video(video, tmp_path / "out", every=1)
     assert [f.seconds for f in result.frames] == pytest.approx([i / 10 for i in range(20)])
     assert result.frames[15].timestamp == "00:00:01.500"
     assert result.frames[15].path.name == "frame_000016_00h00m01.500s.jpg"
@@ -60,9 +60,34 @@ def test_fps_and_formats(tmp_path):
 
 def test_rerun_replaces_old_frames(tmp_path):
     video = make_video(tmp_path / "clip.mp4")
-    split_video(video, tmp_path / "out")
+    split_video(video, tmp_path / "out", every=1)
     result = split_video(video, tmp_path / "out", fps=1)
     assert len(list(result.frames_dir.glob("frame_*"))) == result.frame_count == 2
+
+
+def test_default_keeps_one_frame_per_30(tmp_path):
+    # 4 s at 30 fps = 120 frames -> frames 0, 30, 60, 90 -> one per second
+    video = tmp_path / "clip30.mp4"
+    subprocess.run([find_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc=duration=4:size=64x48:rate=30",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video)], check=True)
+    result = split_video(video, tmp_path / "out")
+    assert [f.seconds for f in result.frames] == pytest.approx([0, 1, 2, 3])
+
+
+def test_every_n_frames(tmp_path):
+    video = make_video(tmp_path / "clip.mp4")  # 20 frames at 10 fps
+    result = split_video(video, tmp_path / "out", every=5)
+    assert [f.seconds for f in result.frames] == pytest.approx([0, 0.5, 1.0, 1.5])
+    assert result.frames[1].path.name == "frame_000002_00h00m00.500s.jpg"
+
+
+def test_every_and_fps_conflict(tmp_path):
+    video = make_video(tmp_path / "clip.mp4")
+    with pytest.raises(ValueError):
+        split_video(video, tmp_path / "out", fps=1, every=5)
+    with pytest.raises(ValueError):
+        split_video(video, tmp_path / "out", every=0)
 
 
 def test_format_timestamp():
@@ -72,7 +97,7 @@ def test_format_timestamp():
 
 def test_video_without_audio(tmp_path):
     video = make_video(tmp_path / "silent.mp4", with_audio=False)
-    result = split_video(video, tmp_path / "out")
+    result = split_video(video, tmp_path / "out", every=1)
     assert result.frame_count == 20
     assert result.audio_path is None
 
