@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import csv
+import os
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 IMAGE_FORMATS = ("jpg", "png")
@@ -17,10 +19,45 @@ AUDIO_FORMATS = {
 
 
 @dataclass
+class Frame:
+    index: int        # 1-based, in output order
+    seconds: float    # presentation time in the video
+    path: Path
+
+    @property
+    def timestamp(self) -> str:
+        return format_timestamp(self.seconds)
+
+
+@dataclass
 class SplitResult:
     frames_dir: Path
-    frame_count: int
     audio_path: Path | None  # None when the video has no audio stream
+    timestamps_csv: Path
+    frames: list[Frame] = field(default_factory=list)
+
+    @property
+    def frame_count(self) -> int:
+        return len(self.frames)
+
+
+def format_timestamp(seconds: float) -> str:
+    """12.5 -> '00:00:12.500' (HH:MM:SS.mmm)."""
+    ms = round(seconds * 1000)
+    h, ms = divmod(ms, 3_600_000)
+    m, ms = divmod(ms, 60_000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+
+def _filename_timestamp(seconds: float) -> str:
+    """Windows-safe version for file names: '00h00m12.500s'."""
+    h, m, rest = format_timestamp(seconds).split(":")
+    return f"{h}h{m}m{rest}s"
+
+
+# showinfo logs one line per frame, e.g. "... n:  41 pts: 41 pts_time:41  duration:..."
+_SHOWINFO_RE = re.compile(r"\bn:\s*(\d+)\s+pts:\s*-?\d+\s+pts_time:(-?[\d.]+)")
 
 
 def find_ffmpeg() -> str:
@@ -62,6 +99,9 @@ def split_video(
 ) -> SplitResult:
     """Write frames to <output_dir>/frames/ and audio to <output_dir>/audio.<ext>.
 
+    Each frame file is named with its index and timestamp, e.g.
+    frame_000042_00h00m41.000s.jpg, and <output_dir>/frames/timestamps.csv lists them all.
+
     fps: frames per second to extract; None keeps every frame of the video.
     """
     video = Path(video)
@@ -78,17 +118,40 @@ def split_video(
     ffmpeg = find_ffmpeg()
     frames_dir = output_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
+    # Clear frames from an earlier run so a re-run with another fps doesn't mix files.
+    for ext in IMAGE_FORMATS:
+        for old in frames_dir.glob(f"frame_*.{ext}"):
+            old.unlink()
 
-    frame_cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(video), "-an"]
-    if fps is not None:
-        frame_cmd += ["-vf", f"fps={fps}"]
-    else:
+    # showinfo (last in the filter chain) logs the pts_time of every frame that gets written.
+    vf = f"fps={fps},showinfo" if fps is not None else "showinfo"
+    frame_cmd = [ffmpeg, "-hide_banner", "-nostats", "-loglevel", "info", "-y",
+                 "-i", str(video), "-an", "-vf", vf]
+    if fps is None:
         frame_cmd += ["-fps_mode", "passthrough"]
     if image_format == "jpg":
         frame_cmd += ["-q:v", "2"]
     frame_cmd.append(str(frames_dir / f"frame_%06d.{image_format}"))
-    _run(frame_cmd)
-    frame_count = len(list(frames_dir.glob(f"frame_*.{image_format}")))
+    proc = _run(frame_cmd)
+    times = {int(n): float(t) for n, t in _SHOWINFO_RE.findall(proc.stderr)}
+
+    frames: list[Frame] = []
+    index = 1
+    while (raw := frames_dir / f"frame_{index:06d}.{image_format}").is_file():
+        seconds = times.get(index - 1)  # showinfo counts from 0
+        if seconds is None:
+            raise RuntimeError(f"ffmpeg reported no timestamp for frame {index}")
+        named = raw.with_name(f"frame_{index:06d}_{_filename_timestamp(seconds)}.{image_format}")
+        os.replace(raw, named)
+        frames.append(Frame(index=index, seconds=seconds, path=named))
+        index += 1
+
+    timestamps_csv = frames_dir / "timestamps.csv"
+    with timestamps_csv.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["frame", "seconds", "timestamp", "file"])
+        for fr in frames:
+            writer.writerow([fr.index, f"{fr.seconds:.3f}", fr.timestamp, fr.path.name])
 
     audio_path = None
     if has_audio(video, ffmpeg):
@@ -98,4 +161,5 @@ def split_video(
             "-vn", *AUDIO_FORMATS[audio_format], str(audio_path),
         ])
 
-    return SplitResult(frames_dir=frames_dir, frame_count=frame_count, audio_path=audio_path)
+    return SplitResult(frames_dir=frames_dir, audio_path=audio_path,
+                       timestamps_csv=timestamps_csv, frames=frames)
