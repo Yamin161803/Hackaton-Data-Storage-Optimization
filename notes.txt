@@ -3,6 +3,8 @@ Hackathon 2026
 Always image by reference (never embedding):
  * Reuse images (including slides)
  * Remove slides without unique content
+ * Save image with hash as name; possible future works include readable names and a metadata json file
+
 
 Adaptive video sampling:
  * Interpolation gets less reliable when framerates are low.
