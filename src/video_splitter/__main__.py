@@ -5,7 +5,8 @@ import argparse
 import sys
 from pathlib import Path
 
-from .splitter import AUDIO_FORMATS, DEFAULT_THRESHOLD, IMAGE_FORMATS, split_video
+from .splitter import (AUDIO_FORMATS, CAMERA_THRESHOLD, DEFAULT_THRESHOLD, IMAGE_FORMATS,
+                       MODES, split_video)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -22,6 +23,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="how much of the picture (0-1) must change to count as a big change "
                              f"(default: {DEFAULT_THRESHOLD:g} = {DEFAULT_THRESHOLD * 100:g}%%); "
                              "lower = more frames")
+    parser.add_argument("--mode", choices=MODES, default="auto",
+                        help="auto (default): if the picture changes almost every frame "
+                             "(camera footage, faces) use --camera-threshold instead")
+    parser.add_argument("--camera-threshold", type=float, default=CAMERA_THRESHOLD,
+                        help=f"threshold for camera footage (default: {CAMERA_THRESHOLD:g})")
     parser.add_argument("--image-format", choices=IMAGE_FORMATS, default="jpg")
     parser.add_argument("--audio-format", choices=tuple(AUDIO_FORMATS), default="wav")
     args = parser.parse_args(argv)
@@ -29,11 +35,14 @@ def main(argv: list[str] | None = None) -> int:
     output = args.output or args.video.with_name(f"{args.video.stem}_split")
     try:
         result = split_video(args.video, output, args.image_format, args.audio_format,
-                             threshold=args.threshold)
+                             threshold=args.threshold, mode=args.mode,
+                             camera_threshold=args.camera_threshold)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
+    print(f"{result.mode} video ({result.motion:.0%} of frames moving), "
+          f"threshold {result.threshold:g}")
     print(f"{result.frame_count} frames -> {result.frames_dir}")
     print(f"timestamps -> {result.timestamps_csv}")
     print(f"audio -> {result.audio_path}" if result.audio_path else "no audio track in video")
