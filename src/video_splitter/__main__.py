@@ -27,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(f"{result.frame_count} frames -> {result.frames_dir}")
+    print(f"timestamps -> {result.timestamps_csv}")
     print(f"audio -> {result.audio_path}" if result.audio_path else "no audio track in video")
     return 0
 
