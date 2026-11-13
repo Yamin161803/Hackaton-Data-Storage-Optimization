@@ -4,3 +4,5 @@ __pycache__/
 *_split/
 # Videos are too big for GitHub (100 MB file limit)
 data/*
+dump/*
+.venv/*
