@@ -16,12 +16,17 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from store import Store, DocumentInput, Page, SOURCE_PPTX  # noqa: E402
+from store import Store, DocumentInput, Page, SOURCE_PPTX, SOURCE_PDF  # noqa: E402
 from store.store import REL_SHORTENED, REL_EXTENDS  # noqa: E402
 
 
 def slide(text: str) -> Page:
     return Page(text=text)
+
+
+def slide_img(notes: str, image_hashes: list[str]) -> Page:
+    """A PPTX slide: picture(s) + speaker notes (the 'text')."""
+    return Page(text=notes, image_hashes=image_hashes)
 
 
 def make_doc(pages, name, full_hash=None):
@@ -165,3 +170,77 @@ def test_fts_search_finds_pages(store):
         "SELECT hash FROM page_fts WHERE page_fts MATCH 'budget'"
     ).fetchall()
     assert len(rows) == 1
+
+
+# ---------- PPTX: picture + speaker-notes identity ----------
+
+def make_pptx(slides, name, full_hash=None):
+    """slides = list of (notes, [image_hashes]) tuples."""
+    page_objs = [slide_img(notes, imgs) for notes, imgs in slides]
+    if full_hash is None:
+        key = "|".join(notes + ":" + ",".join(imgs) for notes, imgs in slides)
+        full_hash = hashlib.sha256(key.encode()).hexdigest()
+    return DocumentInput(
+        full_hash=full_hash, file_size=1, source_type=SOURCE_PPTX,
+        pages=page_objs, source_name=name,
+    )
+
+
+def test_pptx_same_picture_rewritten_notes_is_visual_duplicate(store):
+    # Deck A: one slide, picture IMG1 + notes "v1".
+    a = make_pptx([("original notes", ["IMG1"])], "a.pptx")
+    store.ingest(a)
+
+    # Deck B: SAME picture IMG1, but the notes were rewritten.
+    b = make_pptx([("completely rewritten notes", ["IMG1"])], "b.pptx")
+    rb = store.ingest(b)
+
+    # It's a new page (notes differ -> different overall hash) but flagged as a
+    # VISUAL DUPLICATE: same slide picture, reworded notes.
+    assert rb.status == "stored"
+    assert len(rb.visual_duplicates) == 1
+    assert rb.visual_duplicates[0]["image_hash"] == __import__("store").hash_images(["IMG1"])
+
+
+def test_pptx_same_picture_same_notes_is_exact_page_dup(store):
+    a = make_pptx([("notes", ["IMG1"])], "a.pptx")
+    store.ingest(a)
+    # Different FILE (so not a file-level dup) but the single slide is identical.
+    b = make_pptx([("notes", ["IMG1"])], "b.pptx", full_hash="b" * 64)
+    rb = store.ingest(b)
+    assert rb.status == "stored"
+    assert rb.shared_pages == 1 and rb.new_pages == 0   # exact page dedup
+    assert rb.visual_duplicates == []                   # not a *reworded* dup
+
+
+def test_pptx_empty_notes_slides_not_visual_dups_of_each_other(store):
+    # Two slides with DIFFERENT pictures and NO notes must not collide.
+    a = make_pptx([("", ["IMG1"])], "a.pptx")
+    b = make_pptx([("", ["IMG2"])], "b.pptx")
+    store.ingest(a)
+    rb = store.ingest(b)
+    assert rb.new_pages == 1
+    assert rb.visual_duplicates == []                   # different pictures
+
+
+def test_pptx_different_picture_same_notes_is_not_visual_dup(store):
+    a = make_pptx([("shared notes", ["IMG1"])], "a.pptx")
+    store.ingest(a)
+    b = make_pptx([("shared notes", ["IMG2"])], "b.pptx")
+    rb = store.ingest(b)
+    # Visual-dup is keyed on the PICTURE; different picture -> not a visual dup.
+    assert rb.visual_duplicates == []
+    assert rb.new_pages == 1
+
+
+def test_pdf_combined_identity_text_and_image_move_together(store):
+    # PDF: same text, different image -> different page (combined identity).
+    a = DocumentInput(full_hash="a" * 64, file_size=1, source_type=SOURCE_PDF,
+                      pages=[Page(text="report text", image_hashes=["IMGA"])], source_name="a.pdf")
+    b = DocumentInput(full_hash="b" * 64, file_size=1, source_type=SOURCE_PDF,
+                      pages=[Page(text="report text", image_hashes=["IMGB"])], source_name="b.pdf")
+    store.ingest(a)
+    rb = store.ingest(b)
+    # PDF does not do visual-dup flagging; the two pages are simply distinct.
+    assert rb.new_pages == 1
+    assert rb.visual_duplicates == []

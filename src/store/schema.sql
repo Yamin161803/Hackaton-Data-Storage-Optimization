@@ -36,14 +36,30 @@ CREATE TABLE IF NOT EXISTS document (
 -- One row per UNIQUE page/slide, content-addressed. Shared pages across
 -- documents exist once here. Text lives inline for search; a page may also
 -- reference an image blob in the existing `image` table via image_id.
+--
+-- A page has TWO sub-identities so the two source types can be handled right:
+--   * text_hash  -- hash of the page's text. For PPTX this is the SPEAKER NOTES;
+--                    for PDF it is the page's extractable text.
+--   * image_hash -- hash of the page's picture(s). For PPTX the slide picture;
+--                    for PDF the combined image(s).
+-- The combined `hash` (PRIMARY KEY) is the page's overall identity:
+--   * PDF : hash(text + images) combined  -> text and image move together.
+--   * PPTX: still unique per (image_hash, text_hash) pair, but we keep the two
+--           sub-hashes separate so "same picture, rewritten notes" is detected
+--           as a visual-duplicate / reworded slide via image_hash alone.
 CREATE TABLE IF NOT EXISTS page (
-  hash        TEXT    PRIMARY KEY,              -- SHA-256 of normalized page content (text + referenced image hashes)
-  text        TEXT,                             -- extracted page/slide text (for search + training export)
+  hash        TEXT    PRIMARY KEY,              -- overall page identity (see above)
+  text_hash   TEXT,                             -- hash of text (PPTX: speaker notes; PDF: page text)
+  image_hash  TEXT,                             -- hash of the picture(s) (slide/page image set)
+  text        TEXT,                             -- the text itself (notes for PPTX, page text for PDF) for search/export
   image_id    INTEGER,                          -- optional: rendered page image id in the existing image() table
                                                 -- (kept as a plain column, not a hard FK, so this store works both
                                                 --  standalone and against the shared database without requiring image())
   byte_size   INTEGER NOT NULL DEFAULT 0        -- size of the stored text/content
 );
+
+-- Find slides that share a picture (PPTX visual-duplicate detection).
+CREATE INDEX IF NOT EXISTS idx_page_image_hash ON page(image_hash);
 
 -- The MANIFEST: the ordered list of pages that make up a document.
 -- (document_id, position) is the order; page_hash is the content reference.

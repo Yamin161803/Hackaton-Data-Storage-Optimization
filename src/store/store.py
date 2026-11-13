@@ -35,18 +35,37 @@ REL_MODIFIED = 4   # overlapping but neither subset nor superset
 
 # ---------- hashing (mirrors videohash.py conventions) ----------
 
-def hash_page(text: str, image_hashes: list[str] | None = None) -> str:
-    """Content hash of a page: normalized text + any referenced image hashes.
-
-    Hashing normalized *content* (not raw file bytes) makes a page robust to
-    re-exports / metadata changes: the same slide re-saved still matches.
-    """
+def _sha(*parts: str) -> str:
     h = hashlib.sha256()
-    h.update((text or "").strip().encode("utf-8"))
-    for ih in sorted(image_hashes or []):
-        h.update(b"\x00")
-        h.update(ih.encode("utf-8"))
+    for i, p in enumerate(parts):
+        if i:
+            h.update(b"\x00")
+        h.update((p or "").encode("utf-8"))
     return h.hexdigest()
+
+
+def hash_text(text: str) -> str:
+    """Hash of a page's text. For PPTX this is the SPEAKER NOTES; for PDF the page text."""
+    return _sha((text or "").strip())
+
+
+def hash_images(image_hashes: list[str] | None) -> str:
+    """Hash of a page's picture set (order-independent)."""
+    return _sha(*sorted(image_hashes or []))
+
+
+def combined_hash(text_hash: str, image_hash: str) -> str:
+    """Overall page identity from the two sub-hashes."""
+    return _sha(text_hash, image_hash)
+
+
+def hash_page(text: str, image_hashes: list[str] | None = None) -> str:
+    """Overall page identity: combines normalized text + referenced image hashes.
+
+    Kept for backward compatibility / convenience; equals
+    combined_hash(hash_text(text), hash_images(image_hashes)).
+    """
+    return combined_hash(hash_text(text), hash_images(image_hashes))
 
 
 def _id_from_hash(hex_digest: str) -> int:
@@ -61,14 +80,33 @@ def _id_from_hash(hex_digest: str) -> int:
 
 @dataclass
 class Page:
-    """One page/slide produced by an extractor."""
+    """One page/slide produced by an extractor.
+
+    * text         -- PPTX: speaker notes; PDF: page text.
+    * image_hashes -- content hashes of the picture(s) on the page/slide.
+
+    Identity:
+      PDF : text and image move together (combined identity).
+      PPTX: text_hash (notes) and image_hash (slide picture) are tracked
+            separately, so "same picture, rewritten notes" is a visual duplicate.
+    The overall `hash` is combined_hash(text_hash, image_hash) in both cases;
+    the difference is in how dedup/version logic *uses* the sub-hashes (see Store).
+    """
     text: str
     image_hashes: list[str] = field(default_factory=list)
     image_id: int | None = None
 
     @property
+    def text_hash(self) -> str:
+        return hash_text(self.text)
+
+    @property
+    def image_hash(self) -> str:
+        return hash_images(self.image_hashes)
+
+    @property
     def hash(self) -> str:
-        return hash_page(self.text, self.image_hashes)
+        return combined_hash(self.text_hash, self.image_hash)
 
 
 @dataclass
@@ -90,6 +128,10 @@ class IngestResult:
     new_pages: int = 0          # pages whose content was not already stored
     shared_pages: int = 0       # pages already present (dedup hits)
     version_candidates: list[int] = field(default_factory=list)  # doc ids sharing >=1 page
+    # PPTX only: slides whose PICTURE matches an existing slide but whose NOTES
+    # differ -> "same slide, rewritten notes". Each entry:
+    #   {"new_page_hash", "matched_page_hash", "image_hash"}
+    visual_duplicates: list[dict] = field(default_factory=list)
 
 
 # ---------- store ----------
@@ -147,6 +189,27 @@ class Store:
         ).fetchall()
         return [r["page_hash"] for r in rows]
 
+    def visual_duplicates(self, image_hash: str, exclude_page_hash: str | None = None) -> list[dict]:
+        """Existing pages that share this picture (same image_hash).
+
+        Used for PPTX: a slide with the SAME picture but DIFFERENT speaker notes
+        is a visual duplicate / reworded slide. Pages with an empty picture are
+        never treated as visual duplicates of each other (nothing to match on).
+        """
+        if not image_hash or image_hash == hash_images([]):
+            return []
+        rows = self.conn.execute(
+            "SELECT hash, text_hash, image_hash FROM page WHERE image_hash = ?",
+            (image_hash,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            if exclude_page_hash and r["hash"] == exclude_page_hash:
+                continue
+            out.append({"page_hash": r["hash"], "text_hash": r["text_hash"],
+                        "image_hash": r["image_hash"]})
+        return out
+
     # -- ingest --
 
     def ingest(self, doc: DocumentInput, record_edges: bool = True) -> IngestResult:
@@ -179,14 +242,27 @@ class Store:
 
         # 4. Dedup + store pages, write the ordered manifest.
         new_pages = shared_pages = 0
+        visual_dups: list[dict] = []
         for position, page in enumerate(doc.pages):
             ph = page.hash
+            # PPTX only: before this page becomes a new row, is its PICTURE already
+            # used by an existing slide with DIFFERENT notes? -> visual duplicate.
+            if doc.source_type == SOURCE_PPTX and not self.page_exists(ph):
+                for match in self.visual_duplicates(page.image_hash, exclude_page_hash=ph):
+                    if match["text_hash"] != page.text_hash:
+                        visual_dups.append({
+                            "new_page_hash": ph,
+                            "matched_page_hash": match["page_hash"],
+                            "image_hash": page.image_hash,
+                        })
             if self.page_exists(ph):
                 shared_pages += 1
             else:
                 self.conn.execute(
-                    "INSERT INTO page (hash, text, image_id, byte_size) VALUES (?,?,?,?)",
-                    (ph, page.text, page.image_id, len((page.text or "").encode("utf-8"))),
+                    "INSERT INTO page (hash, text_hash, image_hash, text, image_id, byte_size) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (ph, page.text_hash, page.image_hash, page.text, page.image_id,
+                     len((page.text or "").encode("utf-8"))),
                 )
                 self.conn.execute(
                     "INSERT INTO page_fts (text, hash) VALUES (?, ?)", (page.text or "", ph)
@@ -206,6 +282,7 @@ class Store:
             status="stored", document_id=doc_id,
             new_pages=new_pages, shared_pages=shared_pages,
             version_candidates=candidates,
+            visual_duplicates=visual_dups,
         )
 
     def _record_edges(self, child_id: int, child_pages: set[str], candidates: list[int]) -> None:
