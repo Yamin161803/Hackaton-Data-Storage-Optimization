@@ -57,10 +57,9 @@ def test_video_id_falls_back_to_file_hash(tmp_path, monkeypatch):
 
 # ---------- video id in the notes ----------
 
-def test_notes_start_with_video_front_matter(tmp_path):
+def test_notes_start_with_fingerprint_only(tmp_path):
     split = make_split_dir(tmp_path, [0], TRANSCRIPT)
-    info = VideoInfo('My "talk".mp4', -42, "content", 1234,
-                     "ab" * 32, "sha256-size-first-last-1MiB", "cd" * 32, "sha256")
+    info = VideoInfo(1234, "ab" * 32, "sha256-size-first-last-1MiB", "cd" * 32, "sha256")
     md = build_notes(split, video=info)
     text = md.read_text(encoding="utf-8")
     assert text.startswith(
@@ -68,10 +67,28 @@ def test_notes_start_with_video_front_matter(tmp_path):
         "file_size: 1234\n"
         f"quick_hash: {'ab' * 32}\nquick_hash_method: sha256-size-first-last-1MiB\n"
         f"full_hash: {'cd' * 32}\nfull_hash_algorithm: sha256\n"
-        'video: "My \\"talk\\".mp4"\nvideo_id: -42\nvideo_id_method: content\n'
-        "---\n\n# ")
-    assert 'Video: `My "talk".mp4` · ID `-42`' in text
-    assert read_video_id(md) == -42
+        "---\n\n# My talk\n\n---\n")
+    assert "video_id" not in text and "Video: `" not in text and "frames ·" not in text
+
+
+def test_keywords_go_in_front_matter(tmp_path):
+    from notes.meeting_notes import read_keywords
+    split = make_split_dir(tmp_path, [0], TRANSCRIPT)
+    info = VideoInfo(1, "ab" * 32, "m", "cd" * 32, "sha256")
+    seen = []
+    md = build_notes(split, video=info,
+                     keyworder=lambda text: seen.append(text) or ["GraalVM", "native image"])
+    text = md.read_text(encoding="utf-8")
+    assert 'full_hash_algorithm: sha256\nkeywords: ["GraalVM", "native image"]\n---' in text
+    assert read_keywords(md) == ["GraalVM", "native image"]
+    assert seen and seen[0].startswith("Hello and welcome.")   # gets the transcript
+
+
+def test_no_keywords_no_line(tmp_path):
+    from notes.meeting_notes import read_keywords
+    split = make_split_dir(tmp_path, [0], TRANSCRIPT)
+    md = build_notes(split, keyworder=lambda text: [])
+    assert "keywords" not in md.read_text(encoding="utf-8") and read_keywords(md) == []
 
 
 def test_read_video_id_without_front_matter(tmp_path):
@@ -113,19 +130,28 @@ def site(tmp_path, monkeypatch):
     monkeypatch.setattr(server.pipeline, "NOTES_DIR", notes)
     monkeypatch.setattr(server.pipeline, "RESOURCES_DIR", resources)
     calls = []
-    diarization = {"works": True}   # set to False to simulate a missing token
+    # set "works" to False to simulate a missing HF token, "ollama" for Ollama down
+    diarization = {"works": True, "ollama": True}
 
     def fake_make_notes(video, output, **kwargs):
         calls.append((video.name, output, kwargs))
-        vid, method = videohash.video_id(video)
+        fp = videohash.fingerprint(video)
         frame_dir = resources / video.stem
         frame_dir.mkdir(parents=True, exist_ok=True)
         (frame_dir / "frame_1.jpg").write_bytes(b"jpg")
         output.parent.mkdir(parents=True, exist_ok=True)
         n = (kwargs.get("num_speakers") or 2) if kwargs.get("speakers") and \
             diarization["works"] else 0
-        front = f"video_id: {vid}\n" + (f"speakers: {n}\n" if n else "")
-        output.write_text(f"---\n{front}---\n\n# {video.stem}\n\n"
+        front = (f"file_size: {fp.file_size}\nquick_hash: {fp.quick_hash}\n"
+                 f"quick_hash_method: {fp.quick_hash_method}\nfull_hash: {fp.full_hash}\n"
+                 f"full_hash_algorithm: {fp.full_hash_algorithm}\n")
+        if kwargs.get("keywords") and diarization["ollama"]:
+            front += 'keywords: ["test"]\n'
+        if n:
+            front += f"speakers: {n}\n"
+        summary = "## Summary\n\nIt was a test.\n\n" \
+            if kwargs.get("summary", True) and diarization["ollama"] else ""
+        output.write_text(f"---\n{front}---\n\n# {video.stem}\n\n{summary}"
                           f"![Frame](../resources/{video.stem}/frame_1.jpg)\n",
                           encoding="utf-8")
         return output
@@ -151,7 +177,7 @@ def test_upload_video_returns_notes_with_embedded_images(site, tmp_path):
 
     assert resp.status_code == 200
     assert resp.headers["Content-Disposition"].endswith("My_talk.md")
-    assert resp.headers["X-File-Id"] == str(videohash.video_id(video)[0])
+    assert resp.headers["X-File-Id"] == videohash.full_hash(video)
     assert resp.headers["X-Cached"] == "0"
     body = resp.data.decode("utf-8")
     assert "![Frame](data:image/jpeg;base64,anBn)" in body       # self-contained download
@@ -160,17 +186,25 @@ def test_upload_video_returns_notes_with_embedded_images(site, tmp_path):
     assert len(calls) == 1 and calls[0][2]["speakers"] is False
 
 
-def test_same_video_again_uses_saved_notes(site, tmp_path):
+def test_same_file_again_uses_saved_notes(site, tmp_path):
     client, calls, _ = site
     video = make_video(tmp_path / "a.mp4", [("black", 1)])
     upload(client, video)
-    renamed = with_title(video, tmp_path / "b.mp4", "other title")   # same content
 
-    resp = upload(client, renamed)
+    resp = upload(client, video, name="renamed copy.mp4")           # same bytes
 
     assert resp.status_code == 200 and resp.headers["X-Cached"] == "1"
     assert resp.headers["Content-Disposition"].endswith("a.md")
     assert len(calls) == 1                                           # not processed again
+
+
+def test_changed_metadata_counts_as_another_file(site, tmp_path):
+    client, calls, _ = site
+    video = make_video(tmp_path / "a.mp4", [("black", 1)])
+    upload(client, video)
+    retitled = with_title(video, tmp_path / "b.mp4", "other title")  # other bytes
+    assert upload(client, retitled).headers["X-Cached"] == "0"
+    assert len(calls) == 2
 
 
 def test_other_video_with_same_name_gets_own_notes(site, tmp_path):
@@ -181,8 +215,7 @@ def test_other_video_with_same_name_gets_own_notes(site, tmp_path):
     second = make_video(tmp_path / "y" / "talk.mp4", [("white", 1)])
     upload(client, first)
     resp = upload(client, second)
-    vid = videohash.video_id(second)[0]
-    expected = f"talk_{vid & 0xFFFFFFFF:08x}.md"
+    expected = f"talk_{videohash.full_hash(second)[:8]}.md"
     assert resp.headers["Content-Disposition"].endswith(expected)
     assert sorted(p.name for p in notes.iterdir()) == sorted(["talk.md", expected])
 
@@ -325,3 +358,53 @@ def test_real_notes_record_speaker_count(tmp_path):
     without = build_notes(split, output=tmp_path / "plain.md", video=VideoInfo("v.mp4", 5))
     assert read_speaker_count(without) == 0
     assert "speakers:" not in without.read_text(encoding="utf-8")
+
+
+
+# ---------- choice: summary and keywords ----------
+
+def test_summary_and_keywords_choices_are_passed(site, tmp_path):
+    client, calls, _ = site
+    upload(client, make_video(tmp_path / "a.mp4", [("black", 1)]), summary="0", keywords="1")
+    assert calls[0][2]["summary"] is False and calls[0][2]["keywords"] is True
+
+
+def test_defaults_summary_on_keywords_off(site, tmp_path):
+    client, calls, _ = site
+    upload(client, make_video(tmp_path / "a.mp4", [("black", 1)]))
+    assert calls[0][2]["summary"] is True and calls[0][2]["keywords"] is False
+
+
+def test_asking_for_keywords_redoes_notes_without_them(site, tmp_path):
+    client, calls, notes = site
+    video = make_video(tmp_path / "a.mp4", [("black", 1)])
+    upload(client, video)                                    # no keywords
+    assert upload(client, video).headers["X-Cached"] == "1"
+    resp = upload(client, video, keywords="1")
+    assert resp.headers["X-Cached"] == "0" and len(calls) == 2
+    assert 'keywords: ["test"]' in (notes / "a.md").read_text(encoding="utf-8")
+
+
+def test_notes_without_summary_are_redone_when_summary_wanted(site, tmp_path):
+    client, calls, _ = site
+    video = make_video(tmp_path / "a.mp4", [("black", 1)])
+    upload(client, video, summary="0")
+    assert upload(client, video, summary="0").headers["X-Cached"] == "1"
+    assert upload(client, video, summary="1").headers["X-Cached"] == "0"
+    assert len(calls) == 2
+
+
+def test_warning_when_ollama_is_down(site, tmp_path):
+    from urllib.parse import unquote
+    client, _, _ = site
+    client.diarization["ollama"] = False
+    resp = upload(client, make_video(tmp_path / "a.mp4", [("black", 1)]), keywords="1")
+    warning = unquote(resp.headers["X-Warning"])
+    assert resp.status_code == 200
+    assert "Ingen sammanfattning" in warning and "Inga sökord" in warning
+
+
+def test_page_has_summary_and_keyword_choices(site):
+    client, _, _ = site
+    page = client.get("/").data.decode("utf-8")
+    assert 'id="summaryInput" checked' in page and 'id="keywordsInput"' in page

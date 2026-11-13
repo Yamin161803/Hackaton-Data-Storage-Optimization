@@ -67,6 +67,14 @@
 
       <fieldset class="is-options" id="speakerOptions">
         <label class="is-check">
+          <input type="checkbox" id="summaryInput" checked>
+          <span>Sammanfattning</span>
+        </label>
+        <label class="is-check">
+          <input type="checkbox" id="keywordsInput">
+          <span>Sökord</span>
+        </label>
+        <label class="is-check">
           <input type="checkbox" id="speakersInput">
           <span>Visa vem som pratar</span>
         </label>
@@ -74,7 +82,7 @@
           Antal talare
           <input type="number" id="numSpeakersInput" min="1" max="20" placeholder="auto" inputmode="numeric">
         </label>
-        <p class="is-options__hint">Tar längre tid: talarna identifieras på datorns processor.</p>
+        <p class="is-options__hint">Sammanfattning och sökord görs av en lokal AI-modell (Ollama). Talare tar längre tid: de identifieras på datorns processor.</p>
       </fieldset>
 
       <div class="is-actions">
