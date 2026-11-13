@@ -101,8 +101,8 @@ def split_video(
 ) -> SplitResult:
     """Write frames to <output_dir>/frames/ and audio to <output_dir>/audio.<ext>.
 
-    Each frame file is named with its index and timestamp, e.g.
-    frame_000042_00h00m41.000s.jpg, and <output_dir>/frames/timestamps.csv lists them all.
+    Each frame file is named with its timestamp, e.g. frame_00h00m41.000s.jpg,
+    and <output_dir>/frames/timestamps.csv lists them all.
 
     every: keep 1 frame out of every N video frames (frames 1, N+1, 2N+1, ...).
            Defaults to 30; use 1 for all frames.
@@ -157,7 +157,9 @@ def split_video(
         seconds = times.get(index - 1)  # showinfo counts from 0
         if seconds is None:
             raise RuntimeError(f"ffmpeg reported no timestamp for frame {index}")
-        named = raw.with_name(f"frame_{index:06d}_{_filename_timestamp(seconds)}.{image_format}")
+        named = raw.with_name(f"frame_{_filename_timestamp(seconds)}.{image_format}")
+        if frames and named == frames[-1].path:
+            raise RuntimeError(f"two frames share timestamp {format_timestamp(seconds)}")
         os.replace(raw, named)
         frames.append(Frame(index=index, seconds=seconds, path=named))
         index += 1
