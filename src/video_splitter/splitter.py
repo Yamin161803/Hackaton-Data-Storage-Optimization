@@ -122,6 +122,16 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return proc
 
 
+def has_video(path: Path, ffmpeg: str) -> bool:
+    """True when the file has a real video stream (cover art in an MP3 doesn't count)."""
+    proc = subprocess.run(
+        [ffmpeg, "-hide_banner", "-i", str(path)],
+        capture_output=True, text=True, errors="replace",
+    )
+    return any("attached pic" not in line
+               for line in re.findall(r"Stream #\S+.*: Video:.*", proc.stderr))
+
+
 def has_audio(video: Path, ffmpeg: str) -> bool:
     # `ffmpeg -i` with no output exits non-zero but prints stream info to stderr.
     proc = subprocess.run(

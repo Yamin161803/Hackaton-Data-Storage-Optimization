@@ -7,16 +7,27 @@ const API_URL      = (location.origin === BACKEND || location.port === "8000")
                      ? "/api/compress"
                      : `${BACKEND}/api/compress`;
 const FIELD_NAME   = "file";          // namnet på fältet i multipart/form-data
-const MAX_FILE_MB  = 200;             // visas för användaren + kontrolleras före uppladdning
+const MAX_FILE_MB  = 2048;            // visas för användaren + kontrolleras före uppladdning
 
 /* ============================================================== */
 const $ = (s) => document.querySelector(s);
 const fileInput = $("#fileInput"), dropZone = $("#dropZone"), list = $("#fileList");
 const startBtn = $("#startBtn"), clearBtn = $("#clearBtn"), resultBody = $("#resultBody");
 const emptyState = $("#emptyState");
+const speakersInput = $("#speakersInput"), numSpeakersInput = $("#numSpeakersInput");
+const numSpeakersLabel = $("#numSpeakersLabel"), speakerOptions = $("#speakerOptions");
+
+/* ---------- Val: vem som pratar ---------- */
+function speakerChoice() {
+  const n = parseInt(numSpeakersInput.value, 10);
+  return { speakers: speakersInput.checked, num: speakersInput.checked && n > 0 ? n : null };
+}
+function updateSpeakerOptions() { numSpeakersLabel.hidden = !speakersInput.checked; }
+speakersInput.addEventListener("change", updateSpeakerOptions);
+updateSpeakerOptions();
 
 $("#apiChip .is-mono").textContent = API_URL;
-$("#limitHint").textContent = `Valfri filtyp, upp till ${MAX_FILE_MB} MB per fil`;
+$("#limitHint").textContent = `Videofiler (mp4, mov, mkv, webm, avi, m4v), upp till ${MAX_FILE_MB / 1024} GB per fil`;
 
 /* ---------- Tema ---------- */
 (function initTheme() {
@@ -53,7 +64,7 @@ function escapeHtml(s) {
 /* ---------- Lägg till filer ---------- */
 function addFiles(fileList) {
   for (const f of fileList) {
-    const item = { id: nextId++, file: f, status: "queued", progress: 0 };
+    const item = { id: nextId++, file: f, status: "queued", progress: 0, choice: null };
     if (f.size > MAX_FILE_MB * 1024 * 1024) {
       item.status = "error";
       item.error = `Filen är ${fmtBytes(f.size)}. Maxstorleken är ${MAX_FILE_MB} MB.`;
@@ -106,6 +117,7 @@ function render() {
 
   const pending = items.some(i => i.status === "queued");
   startBtn.disabled = running || !pending;
+  speakerOptions.disabled = running;
   clearBtn.disabled = running || items.length === 0;
   updateSteps();
   renderResult();
@@ -142,7 +154,7 @@ function renderResult() {
   if (it.status === "error") {
     resultBody.innerHTML = name + `
       <div class="is-op-card" data-kind="error">
-        <strong>Filen kunde inte komprimeras</strong>${escapeHtml(it.error || "Okänt fel.")}
+        <strong>Anteckningarna kunde inte skapas</strong>${escapeHtml(it.error || "Okänt fel.")}
       </div>
       <div class="is-actions"><button class="is-btn is-btn--ghost is-btn--sm" id="retryBtn" type="button">Försök igen</button></div>`;
     $("#retryBtn").addEventListener("click", () => {
@@ -154,9 +166,11 @@ function renderResult() {
 
   if (it.status !== "done") {
     const msg = {
-      queued: "Filen väntar. Klicka på Komprimera för att starta.",
+      queued: "Videon väntar. Klicka på Skapa anteckningar för att starta.",
       uploading: `Skickar filen till servern (${Math.round(it.progress)} %).`,
-      processing: "Servern komprimerar filen. Det kan ta en stund för stora filer."
+      processing: it.choice && it.choice.speakers
+        ? "Servern gör anteckningar av videon och tar reda på vem som pratar. Det tar längre tid, ungefär lika lång tid som videon."
+        : "Servern gör anteckningar av videon: bildrutor, transkribering och sammanfattning. Det tar några minuter för långa videor."
     }[it.status];
     resultBody.innerHTML = name + `
       <div class="is-stats">
@@ -188,9 +202,11 @@ function renderResult() {
       <span><i style="background:#2E7D32"></i>Sparat</span>
     </div>
     <div class="is-op-card" data-kind="ok">
-      <strong>Klar att ladda ner</strong>
-      Sparas som <span class="is-mono is-token">${escapeHtml(it.outName)}</span>
+      <strong>${it.cached ? "Videon fanns redan – sparade anteckningar" : "Klar att ladda ner"}</strong>
+      ${it.choice && it.choice.speakers && !it.warning ? "Med talare. " : ""}
+      Sparas som <span class="is-mono is-token">${escapeHtml(it.outName)}</span>${it.fileId ? `<br>Video-id <span class="is-mono is-token">${escapeHtml(it.fileId)}</span>` : ""}
     </div>
+    ${it.warning ? `<div class="is-op-card" data-kind="error"><strong>Utan talare</strong>${escapeHtml(it.warning)}</div>` : ""}
     <div class="is-actions">
       <button class="is-btn" id="dlBtn" type="button">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>
@@ -234,7 +250,11 @@ function uploadOne(it) {
         it.outBlob = blob;
         it.outSize = blob.size;
         it.outName = filenameFromHeader(xhr.getResponseHeader("Content-Disposition"))
-                     || `komprimerad_${it.file.name}`;
+                     || it.file.name.replace(/\.[^.]+$/, "") + ".md";
+        it.fileId = xhr.getResponseHeader("X-File-Id");
+        it.cached = xhr.getResponseHeader("X-Cached") === "1";
+        const warn = xhr.getResponseHeader("X-Warning");
+        it.warning = warn ? decodeURIComponent(warn) : "";
         it.status = "done";
       } else {
         let detail = "";
@@ -256,6 +276,9 @@ function uploadOne(it) {
 
     const fd = new FormData();
     fd.append(FIELD_NAME, it.file, it.file.name);
+    it.choice = speakerChoice();               // valet när filen skickas
+    fd.append("speakers", it.choice.speakers ? "1" : "0");
+    if (it.choice.num) fd.append("num_speakers", String(it.choice.num));
     it.status = "uploading"; it.progress = 0; render();
     xhr.send(fd);
   });

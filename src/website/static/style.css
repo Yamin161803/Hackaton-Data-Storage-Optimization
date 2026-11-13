@@ -208,6 +208,16 @@
   .is-btn--sm { padding: 6px 12px; font-size: 13px; }
 
   .is-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  .is-options { border: 1px solid var(--border); border-radius: 12px; margin: 16px 0 0;
+    padding: 12px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; }
+  .is-options[disabled] { opacity: .6; }
+  .is-check, .is-number { display: inline-flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 500; cursor: pointer; }
+  .is-check input { width: 18px; height: 18px; accent-color: #1174E6; cursor: pointer; }
+  .is-number input { width: 72px; padding: 6px 8px; border-radius: 8px; font: inherit;
+    border: 1px solid var(--border); background: transparent; color: inherit; }
+  .is-number[hidden] { display: none; }
+  .is-options__hint { flex-basis: 100%; margin: 0; font-size: 12.5px; color: var(--text-soft); }
 
   /* ---------- File rows ---------- */
   .is-list { display: grid; gap: 6px; margin-top: 16px; }
