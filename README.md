@@ -95,6 +95,45 @@ summary, search keywords and speaker labels per upload. Server options:
 `--whisper-model large-v3`, `--port`, and defaults `--no-summary`, `--keywords`,
 `--speakers`.
 
+The **Rensa dubbletter** tab (<http://localhost:8000/dedupe>) runs `slide_dedupe` on a
+folder you pick. It shows run time and how much space deleting the rejected files would
+free. Optionally it moves them to a trash folder, and, after you confirm, can empty that
+folder automatically or on demand. Every web run uses a fresh index, so the whole folder
+is analysed each time.
+
+## Slides and documents
+
+```bash
+# Which PDF / PowerPoint / image files can go without losing a unique slide?
+python src/dedupe/slide_dedupe.py data/raw                    # report only
+python src/dedupe/slide_dedupe.py data/raw --mode batch --trash data/trash
+
+# PDF -> Markdown with images saved once, named by their hash
+python src/notes/pdf_to_markdown.py "data/raw/deck.pdf" --out data/docs
+```
+
+`slide_dedupe` hashes every slide (text + images; an image file is one slide) and
+keeps the fewest files that still hold every unique slide. Files are only moved with
+`--trash`. Its state is kept in `data/slide_index.json`.
+
+## Project layout
+
+```
+src/
+  app.py              video/audio -> meeting notes (one command)
+  lookup.py           find the notes for a recording, and the reverse
+  videohash.py        file fingerprint: size, quick hash, full hash
+  video_splitter/     key frames + audio
+  transcription/      speech to text, speaker labels
+  notes/              Markdown notes, summary and keywords (Ollama), pdf_to_markdown.py
+  website/            local website (Flask) + static page
+  dedupe/             slide_dedupe.py (duplicate cleanup)
+tests/                pytest tests for all of the above
+data/                 raw/, meeting_notes/, resources/ (git-ignored contents),
+                      slide_index.json, database
+docs/                 notes.txt, challenge brief, rendered README, example transcripts
+```
+
 ## Transcription only
 
 ```bash

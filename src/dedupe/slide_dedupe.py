@@ -1,9 +1,9 @@
 """
 slide_dedupe.py
 
-Find the smallest collection of PDF and PowerPoint files that preserves
-all unique slides, and report how much disk space the cleanup saves and
-where the run spends its time.
+Find the smallest collection of PDF, PowerPoint and image files that
+preserves all unique slides, and report how much disk space the cleanup saves
+and where the run spends its time.
 
 The script compares individual slides across files. Each slide is identified
 by a SHA-256 hash calculated from:
@@ -12,6 +12,11 @@ by a SHA-256 hash calculated from:
 
 Two slides are considered identical if their normalized text and image hashes
 match. Page numbers are ignored by default.
+
+Image files (.png, .jpg, .jpeg, .gif, .bmp, .webp, .tif, .tiff) count as a file
+with one slide: no text and one image, hashed from the file's bytes just like a
+picture inside a PPTX. So two copies of the same image are duplicates, and an
+image is also a duplicate of a slide that holds only that same picture.
 
 A file is represented by the set of unique slides it contains. The script
 keeps files that contribute slides not found in other kept files and discards
@@ -58,20 +63,21 @@ INPUTS
 ------
 
 You can provide:
-    - Individual PDF or PPTX files.
+    - Individual PDF, PPTX or image (PNG, JPG, ...) files.
     - Multiple files in one command.
     - One or more folders.
     - Any combination of files and folders.
 
 Folders are scanned recursively. Files are processed in sorted order within
-each folder. Supported extensions are defined by SUPPORTED (.pdf, .pptx).
+each folder. Supported extensions are defined by SUPPORTED (.pdf, .pptx and
+the image types in IMAGE_EXTS).
 
 OPTIONS
 -------
 
 --index PATH
     Path to the JSON file used to store the collection's state.
-    Default: slide_index.json
+    Default: data/slide_index.json (in the project folder)
 
 --mode {online,batch}
     Select the processing mode. Default: online.
@@ -84,6 +90,7 @@ OPTIONS
 
 --text-only
     Ignore embedded images when comparing slides. Only extracted text is used.
+    Image files are still compared by their content (they have no text).
 
 --keep-page-numbers
     Include page-number lines when comparing slides.
@@ -121,19 +128,19 @@ USAGE EXAMPLES
 --------------
 
 Dry run with space and timing report:
-    python slide_dedupe.py data/
+    python src/dedupe/slide_dedupe.py data/raw
 
 Find bottlenecks with cProfile + snakeviz:
-    python slide_dedupe.py data/ --index /tmp/test_index.json --profile run.prof --snakeviz
+    python src/dedupe/slide_dedupe.py data/raw --index /tmp/test_index.json --profile run.prof --snakeviz
 
 Faster run on a big folder:
-    python slide_dedupe.py data/ --workers 4 --fast-images
+    python src/dedupe/slide_dedupe.py data/raw --workers 4 --fast-images
 
 Track runs over time:
-    python slide_dedupe.py data/ --report-json reports/run_2026-11-13.json
+    python src/dedupe/slide_dedupe.py data/raw --report-json reports/run_2026-11-13.json
 
 Move discarded files:
-    python slide_dedupe.py data/ --mode batch --trash discarded/
+    python src/dedupe/slide_dedupe.py data/raw --mode batch --trash discarded/
 
 REQUIREMENTS
 ------------
@@ -154,7 +161,8 @@ NOTES
   or use a new index to make the script process it again.
 - Image comparison uses embedded image data, not visual similarity.
   Visually identical images with different encodings may therefore
-  produce different hashes.
+  produce different hashes. The same goes for image files: a PNG and a JPG
+  of the same picture, or a resized copy, are different images.
 - The prefilter only catches byte-identical files. A re-saved or
   re-exported copy is still caught, just later, by the slide comparison.
 """
@@ -173,7 +181,11 @@ from collections import Counter, defaultdict
 from contextlib import contextmanager
 from pathlib import Path
 
-SUPPORTED = {".pdf", ".pptx"}
+# The index (state between runs) lives with the data: <project>/data/slide_index.json
+DEFAULT_INDEX = Path(__file__).resolve().parents[2] / "data" / "slide_index.json"
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff"}
+SUPPORTED = {".pdf", ".pptx"} | IMAGE_EXTS
 
 # Lines like "7", "Page 7", "7 / 20", "7 of 20" are slide numbers / footers.
 # They change when a slide moves position, so by default they are ignored.
@@ -352,6 +364,19 @@ def pptx_slides(path: Path, use_images: bool = True, stats: Stats | None = None)
         yield "\n".join(texts), images
 
 
+def image_slides(path: Path, stats: Stats | None = None):
+    """Yield one (text, [image_hash]) for an image file: no text, the file's bytes.
+
+    Hashed like a picture inside a PPTX (shape.image.blob is the original file
+    bytes), so a slide that holds only this picture gets the same slide hash.
+    """
+    stats = stats or Stats()
+    with stats.phase("image.read"):
+        data = path.read_bytes()
+    stats.bytes["image.read"] += len(data)
+    yield "", [sha256(data)]
+
+
 def file_slide_hashes(path: Path, use_images: bool = True, drop_page_numbers: bool = True,
                       stats: Stats | None = None, fast_images: bool = False) -> list[str]:
     """Return the slide hashes of a file, in slide order (duplicates kept)."""
@@ -361,6 +386,10 @@ def file_slide_hashes(path: Path, use_images: bool = True, drop_page_numbers: bo
         slides = pdf_slides(path, use_images, stats, fast_images)
     elif ext == ".pptx":
         slides = pptx_slides(path, use_images, stats)
+    elif ext in IMAGE_EXTS:
+        # Always by content, even with --text-only: an image has no text, so
+        # ignoring its pixels would make every image file look the same.
+        slides = image_slides(path, stats)
     else:
         raise ValueError(f"Unsupported file type: {path}")
     out = []
@@ -661,6 +690,11 @@ def _bottleneck_hints(stats: Stats, settings: dict) -> list[str]:
 # CLI
 # --------------------------------------------------------------------------
 
+def _is_lock_file(f: Path) -> bool:
+    """Office lock files ("~$deck.pptx") exist while a file is open; they are not decks."""
+    return f.name.startswith("~$")
+
+
 def collect_files(inputs: list[str]) -> list[Path]:
     """Expand folders (recursively, sorted) and keep the given order of files."""
     files, seen = [], set()
@@ -669,7 +703,7 @@ def collect_files(inputs: list[str]) -> list[Path]:
         found = sorted(f for f in p.rglob("*") if f.suffix.lower() in SUPPORTED) if p.is_dir() else [p]
         for f in found:
             key = str(f.resolve())
-            if key not in seen and f.suffix.lower() in SUPPORTED:
+            if key not in seen and f.suffix.lower() in SUPPORTED and not _is_lock_file(f):
                 seen.add(key)
                 files.append(f)
     return files
@@ -690,9 +724,10 @@ def move_to_trash(name: str, trash: Path) -> bool:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Keep the fewest PDF/PPTX files that still hold every unique slide.")
-    ap.add_argument("inputs", nargs="+", help="PDF/PPTX files and/or folders")
-    ap.add_argument("--index", default="slide_index.json", help="State file (default: slide_index.json)")
+    ap = argparse.ArgumentParser(description="Keep the fewest PDF/PPTX/image files that still hold every unique slide.")
+    ap.add_argument("inputs", nargs="+", help="PDF/PPTX/image files and/or folders")
+    ap.add_argument("--index", default=str(DEFAULT_INDEX),
+                    help="State file (default: data/slide_index.json)")
     ap.add_argument("--mode", choices=["online", "batch"], default="online")
     ap.add_argument("--trash", help="Move discarded/evicted files into this folder")
     ap.add_argument("--text-only", action="store_true", help="Ignore images when hashing slides")
@@ -716,6 +751,21 @@ def main(argv=None) -> int:
 
 
 def run(args) -> int:
+    report, index, to_remove = analyze(args)
+    print_report(report, index, to_remove, args)
+    if args.report_json:
+        Path(args.report_json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report_json).write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(f"Report saved:  {args.report_json}")
+    return 0
+
+
+def analyze(args) -> tuple[dict, "SlideIndex", list[str]]:
+    """Run the whole pipeline (scan -> act) and return (report, index, files not kept).
+
+    `args` holds the CLI options (see build_parser); the website calls this directly.
+    The report also lists every file not kept ("removed") and every kept file ("kept").
+    """
     t_start = time.perf_counter()
     stats = Stats()
     stage: dict[str, float] = {}
@@ -895,15 +945,12 @@ def run(args) -> int:
         "phases": stats.to_dict(),
         "slowest_files": sorted(per_file, key=lambda r: -r["seconds"])[: args.top],
         "hints": _bottleneck_hints(stats, {"workers": args.workers}),
+        "removed": [{"file": n, "reason": index.discarded[n], "bytes": _size_of(n, index)}
+                    for n in to_remove],
+        "kept": [{"file": n, "bytes": _size_of(n, index)} for n in sorted(index.kept)],
+        "moved_files": moved,
     }
-
-    print_report(report, index, to_remove, args)
-
-    if args.report_json:
-        Path(args.report_json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.report_json).write_text(json.dumps(report, indent=2), encoding="utf-8")
-        print(f"Report saved:  {args.report_json}")
-    return 0
+    return report, index, to_remove
 
 
 def print_report(report: dict, index: SlideIndex, to_remove: list[str], args) -> None:

@@ -11,14 +11,15 @@ are stored only once. Images whose hash is already in the folder are skipped.
 Requirements:
     pip install pypdf pillow
 
-Usage:
-    python pdf_to_markdown.py input.pdf
-    python pdf_to_markdown.py input.pdf --out output_folder
+Usage (from the project folder):
+    python src/notes/pdf_to_markdown.py input.pdf
+    python src/notes/pdf_to_markdown.py input.pdf --out output_folder
 
 """
 
 import argparse
 import hashlib
+import sys
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -116,15 +117,18 @@ def convert(pdf_path, out_dir=None):
     return md_path
 
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Extract images and text from a PDF into Markdown.")
+    parser.add_argument("pdf", help="Path to the PDF file")
+    parser.add_argument("--out", help="Output folder (default: folder named after the PDF)")
+    args = parser.parse_args(argv)
+    try:
+        convert(args.pdf, args.out)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 if __name__ == "__main__":
-    # parser = argparse.ArgumentParser(description="Extract images and text from a PDF into Markdown.")
-    # parser.add_argument("pdf", help="Path to the PDF file")
-    # parser.add_argument("--out", help="Output folder (default: folder named after the PDF)")
-    # args = parser.parse_args()
-
-    filename =  r"C:\Users\pwoll\Desktop\Python\AI\Hackathon2026\Hackaton-Data-Storage-Optimization\data\test_merged.pdf" \
-    ""
-    out_folder = "dump"
-
-    convert(filename, out_folder)
-    # convert(args.pdf, args.out)
+    sys.exit(main())

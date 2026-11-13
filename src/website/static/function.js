@@ -2,10 +2,10 @@
    Inställningar – anpassa efter er Python-backend
    ============================================================== */
 const BACKEND      = "http://localhost:8000"; // adressen där app.py körs
-// Serveras sidan av Flask (port 8000) används relativ adress, annars full adress
-const API_URL      = (location.origin === BACKEND || location.port === "8000")
-                     ? "/api/compress"
-                     : `${BACKEND}/api/compress`;
+// Serveras sidan av Flask (valfri port) används samma server; öppnad som fil eller
+// via Live Server (port 5500/5501) används BACKEND
+const SAME_SERVER  = location.protocol.startsWith("http") && !["5500", "5501"].includes(location.port);
+const API_URL      = SAME_SERVER ? "/api/compress" : `${BACKEND}/api/compress`;
 const FIELD_NAME   = "file";          // namnet på fältet i multipart/form-data
 const MAX_FILE_MB  = 2048;            // visas för användaren + kontrolleras före uppladdning
 
