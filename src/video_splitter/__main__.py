@@ -1,10 +1,11 @@
-"""CLI: python -m video_splitter input.mp4 [-o out_dir] [--fps N] [--image-format png] [--audio-format mp3]"""
+"""CLI: python -m video_splitter input.mp4 [-o out_dir] [--every N | --fps N]
+[--image-format png] [--audio-format mp3]"""
 
 import argparse
 import sys
 from pathlib import Path
 
-from .splitter import AUDIO_FORMATS, IMAGE_FORMATS, split_video
+from .splitter import AUDIO_FORMATS, DEFAULT_EVERY, IMAGE_FORMATS, split_video
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -14,14 +15,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("video", type=Path, help="input video, e.g. clip.mp4")
     parser.add_argument("-o", "--output", type=Path,
                         help="output folder (default: <video name>_split next to the video)")
-    parser.add_argument("--fps", type=float, help="frames per second to extract (default: all frames)")
+    sampling = parser.add_mutually_exclusive_group()
+    sampling.add_argument("--every", type=int,
+                          help=f"keep 1 frame out of every N (default: {DEFAULT_EVERY}; 1 = all frames)")
+    sampling.add_argument("--fps", type=float, help="instead of --every: frames per second to extract")
     parser.add_argument("--image-format", choices=IMAGE_FORMATS, default="jpg")
     parser.add_argument("--audio-format", choices=tuple(AUDIO_FORMATS), default="wav")
     args = parser.parse_args(argv)
 
     output = args.output or args.video.with_name(f"{args.video.stem}_split")
     try:
-        result = split_video(args.video, output, args.fps, args.image_format, args.audio_format)
+        result = split_video(args.video, output, args.fps, args.image_format, args.audio_format,
+                             every=args.every)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
