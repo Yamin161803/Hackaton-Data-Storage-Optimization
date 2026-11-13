@@ -1,9 +1,12 @@
-"""Run with: python -m pytest test_slide_dedupe.py  (or python test_slide_dedupe.py)"""
+
+
+"""Run with: python -m pytest test_slide_dedupe_v2.py  (or python test_slide_dedupe_v2.py)"""
 import json
 import tempfile
 from pathlib import Path
 
-from slide_dedupe import SlideIndex, file_slide_hashes, main, normalize_text
+import slide_dedupe_v2
+from slide_dedupe_v2 import ContentMatcher, SlideIndex, file_slide_hashes, main, normalize_text, QUICK_CHUNK
 
 
 def _all(index):
@@ -101,6 +104,118 @@ def test_end_to_end_files():
         assert kept == {"c.pdf", "e.pptx"}
         assert data["unique_slides"] == 6
         assert sorted(p.name for p in (d / "trash").iterdir()) == ["a.pdf", "b.pdf", "d.pdf"]
+
+
+# --------------------------------------------------------------------------
+# v2: prefilter, space report, workers, fast images
+# --------------------------------------------------------------------------
+
+def _run(d, files, *extra):
+    report = d / "report.json"
+    main([str(d / f) for f in files] + ["--index", str(d / "index.json"), "--report-json", str(report),
+                                        "--quiet", *extra])
+    return json.loads(report.read_text()), json.loads((d / "index.json").read_text())
+
+
+def test_prefilter_quick_hash_match_but_full_hash_differs():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        size = 10 * QUICK_CHUNK
+        a = bytearray(b"x" * size)
+        b = bytearray(a)
+        b[QUICK_CHUNK + 5] = ord("y")          # outside the three 64 KB samples
+        c = bytearray(b"z" * size)             # same size, different samples
+        for n, data in {"a": a, "b": b, "c": c, "a2": a}.items():
+            (d / n).write_bytes(data)
+        m = ContentMatcher()
+        assert m.register(str(d / "a")) is None
+        assert m.register(str(d / "b")) is None   # quick hash matches, full hash does not
+        assert m.register(str(d / "c")) is None   # quick hash differs
+        assert m.register(str(d / "a2")) == str(d / "a")
+        assert m.counts["quick_match"] == 2 and m.counts["duplicates"] == 1
+
+
+def test_prefilter_skips_full_read_for_unique_sizes():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        (d / "a").write_bytes(b"1" * 100)
+        (d / "b").write_bytes(b"1" * 200)
+        m = ContentMatcher()
+        m.register(str(d / "a")); m.register(str(d / "b"))
+        assert m.counts["unique_size"] == 2
+        assert "quick" not in m.records[str(d / "a")] and "full" not in m.records[str(d / "a")]
+
+
+def test_identical_copy_is_not_parsed_and_space_is_counted(monkeypatch=None):
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        _make_pdf(d / "a.pdf", ["one", "two"])
+        (d / "copy.pdf").write_bytes((d / "a.pdf").read_bytes())
+        _make_pdf(d / "b.pdf", ["one", "two", "three"])
+        report, index = _run(d, ["a.pdf", "copy.pdf", "b.pdf"])
+        assert report["files"]["duplicates_by_content"] == 1
+        assert report["files"]["parsed"] == 2                      # copy.pdf never opened
+        assert "identical file content" in index["discarded"][str((d / "copy.pdf").resolve())]
+        assert {Path(n).name for n in index["kept"]} == {"b.pdf"}
+        removed = (d / "a.pdf").stat().st_size + (d / "copy.pdf").stat().st_size
+        assert report["space"]["removed_this_run_bytes"] == removed
+        assert report["space"]["kept_bytes"] == (d / "b.pdf").stat().st_size
+        assert report["space"]["applied"] is False
+        assert (d / "a.pdf").exists()                               # dry run moves nothing
+
+
+def test_copy_of_file_from_earlier_run_is_caught():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        _make_pdf(d / "a.pdf", ["one", "two"])
+        _run(d, ["a.pdf"])
+        (d / "later.pdf").write_bytes((d / "a.pdf").read_bytes())
+        report, index = _run(d, ["later.pdf"])
+        assert report["files"]["duplicates_by_content"] == 1 and report["files"]["parsed"] == 0
+
+
+def test_workers_give_same_result_as_sequential():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        names = []
+        for i, slides in enumerate([["a", "b"], ["a", "b", "c"], ["c", "d"], ["a", "d"]]):
+            _make_pdf(d / f"f{i}.pdf", slides); names.append(f"f{i}.pdf")
+        _, seq = _run(d, names)
+        (d / "index.json").unlink()
+        _, par = _run(d, names, "--workers", "2")
+        assert seq["kept"] == par["kept"] and seq["discarded"] == par["discarded"]
+
+
+def _make_pdf_with_image(path, color):
+    from PIL import Image
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+    c = canvas.Canvas(str(path))
+    c.drawString(100, 700, "same text")
+    c.drawImage(ImageReader(Image.new("RGB", (40, 40), color)), 100, 400)
+    c.showPage(); c.save()
+
+
+def test_fast_images_still_tells_images_apart():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        _make_pdf_with_image(d / "red.pdf", "red")
+        _make_pdf_with_image(d / "blue.pdf", "blue")
+        for fast in (False, True):
+            r = file_slide_hashes(d / "red.pdf", fast_images=fast)
+            b = file_slide_hashes(d / "blue.pdf", fast_images=fast)
+            assert r != b
+        assert file_slide_hashes(d / "red.pdf", use_images=False) == file_slide_hashes(d / "blue.pdf", use_images=False)
+
+
+def test_phase_timings_are_reported():
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        _make_pdf(d / "a.pdf", ["one", "two"])
+        report, _ = _run(d, ["a.pdf"])
+        assert report["phases"]["pdf.text"]["calls"] == 2
+        assert report["phases"]["slide.hash"]["calls"] == 2
+        assert report["time"]["total_seconds"] > 0
 
 
 if __name__ == "__main__":
