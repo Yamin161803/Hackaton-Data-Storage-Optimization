@@ -1,7 +1,5 @@
-
-
 """
-slide_dedupe_v2.py
+slide_dedupe.py
 
 Find the smallest collection of PDF and PowerPoint files that preserves
 all unique slides, and report how much disk space the cleanup saves and
@@ -123,24 +121,24 @@ USAGE EXAMPLES
 --------------
 
 Dry run with space and timing report:
-    python slide_dedupe_v2.py data/
+    python slide_dedupe.py data/
 
 Find bottlenecks with cProfile + snakeviz:
-    python slide_dedupe_v2.py data/ --index /tmp/test_index.json --profile run.prof --snakeviz
+    python slide_dedupe.py data/ --index /tmp/test_index.json --profile run.prof --snakeviz
 
 Faster run on a big folder:
-    python slide_dedupe_v2.py data/ --workers 4 --fast-images
+    python slide_dedupe.py data/ --workers 4 --fast-images
 
 Track runs over time:
-    python slide_dedupe_v2.py data/ --report-json reports/run_2026-11-13.json
+    python slide_dedupe.py data/ --report-json reports/run_2026-11-13.json
 
 Move discarded files:
-    python slide_dedupe_v2.py data/ --mode batch --trash discarded/
+    python slide_dedupe.py data/ --mode batch --trash discarded/
 
 REQUIREMENTS
 ------------
 
-    pip install pypdf python-pptx
+    pip install pypdf python-pptx snakeviz
     pip install snakeviz          # optional, for --snakeviz
 
 NOTES
