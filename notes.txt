@@ -1,10 +1,10 @@
 Hackathon 2026
 
-Always image by reference (never embedding):
- * Reuse images (including slides)
- * Remove slides without unique content
- * Save image with hash as name; possible future works include readable names and a metadata json file
-
+Pdf to markdown:
+    Always image by reference (never embedding):
+     * Reuse images (including slides)
+     * Remove slides without unique content
+     * Save image with hash as name; possible future works include readable names and a metadata json file
 
 Adaptive video sampling:
  * Interpolation gets less reliable when framerates are low.
@@ -29,5 +29,14 @@ Kan vara bra att skriva ner vilka som deltagit i gruppmöten.
  * Kanske går att göra automatiskt
  * Vore bra om det går att få tag på enkelt.
  * Bildigenkänning av medlemmar?
+
+Gå igenom slides, hasha varje sida
+
+pdf 100 -> hash -> hash är unik i listan av filer -> spara i listan
+-> gå igenom slides hasha -> kolla genom lista av slides
+
+Complete duplicate: hash is equal, delete
+
+Overlap threshold 
 
 
