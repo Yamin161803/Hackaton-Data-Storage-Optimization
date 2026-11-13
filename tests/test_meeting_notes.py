@@ -184,3 +184,65 @@ def test_embedded_images_need_no_image_files(tmp_path):
     text = md.read_text(encoding="utf-8")
     assert "![Frame at 00:00:00](data:image/jpeg;base64,anBn)" in text  # b"jpg"
     assert "frames/" not in text
+
+
+
+# ---------- speaker labels ----------
+
+from notes.meeting_notes import speaker_blocks, transcript_text  # noqa: E402
+
+DIARIZED = """\
+[   0.00 ->    3.00] SPEAKER_01: Hello and welcome.
+[   3.00 ->    6.00] SPEAKER_01: I am the host.
+[   6.00 ->    9.00] SPEAKER_00: Thanks for having me.
+[  10.00 ->   12.00] UNKNOWN: Mumble.
+[  12.00 ->   14.00] SPEAKER_01: Next slide: results.
+"""
+
+
+def test_read_transcript_with_speakers(tmp_path):
+    path = tmp_path / "t.txt"
+    path.write_text(DIARIZED, encoding="utf-8")
+    segs = read_transcript(path, speakers=True)
+    # numbered in the order they first speak, not by pyannote's label
+    assert [s.speaker for s in segs] == [
+        "Speaker 1", "Speaker 1", "Speaker 2", "Unknown", "Speaker 1"]
+    assert segs[0].text == "Hello and welcome."
+    assert segs[4].text == "Next slide: results."   # a colon in the text is kept
+
+
+def test_read_transcript_ignores_labels_unless_asked(tmp_path):
+    path = tmp_path / "t.txt"
+    path.write_text(DIARIZED, encoding="utf-8")
+    segs = read_transcript(path)
+    assert segs[0].speaker is None and segs[0].text == "SPEAKER_01: Hello and welcome."
+
+
+def test_notes_group_text_by_speaker(tmp_path):
+    split = make_split_dir(tmp_path, [0, 11], DIARIZED)
+    md = build_notes(split, speakers=True).read_text(encoding="utf-8")
+    assert "2 frames · 00:00:14 long · 2 speakers" in md
+    one = md.split("## 1.")[1].split("## 2.")[0]
+    assert ("**Speaker 1:** Hello and welcome. I am the host.\n\n"
+            "**Speaker 2:** Thanks for having me.\n\n"
+            "**Unknown:** Mumble.") in one
+    two = md.split("## 2.")[1]
+    assert "**Speaker 1:** Next slide: results." in two
+
+
+def test_summary_gets_who_said_what(tmp_path):
+    split = make_split_dir(tmp_path, [0], DIARIZED)
+    seen = []
+    build_notes(split, speakers=True, summarizer=lambda text: seen.append(text))
+    assert seen[0].splitlines() == [
+        "Speaker 1: Hello and welcome. I am the host.",
+        "Speaker 2: Thanks for having me.",
+        "Unknown: Mumble.",
+        "Speaker 1: Next slide: results."]
+
+
+def test_transcript_text_without_speakers_is_plain(tmp_path):
+    split = make_split_dir(tmp_path, [0], TRANSCRIPT)
+    segs = read_transcript(split / "audio.txt")
+    assert transcript_text(segs).startswith("Hello and welcome. This is the intro.")
+    assert speaker_blocks(segs) == [(None, " ".join(s.text for s in segs))]
