@@ -4,7 +4,7 @@ Speech-to-text for meeting video recordings using **faster-whisper**.
 Goal: compress a large volume of videos into text transcripts, prioritizing
 **speed + accuracy**.
 
-The transcription script (`transcribe.py`) **auto-detects the device**:
+The transcription script (`src/transcription/transcribe.py`) **auto-detects the device**:
 - GPU present  → `cuda` + `float16` (production, e.g. RTX 3070)
 - No GPU       → `cpu` + `int8` (laptop testing — current setup)
 
@@ -44,25 +44,72 @@ A number > 0 means the script will automatically use `device=cuda, float16`.
 On the 3070 (8 GB VRAM), `large-v3` in `float16` fits (~5 GB) and runs at
 roughly 10–15x real-time. Use `--batched` for a further 3–4x on many/long files.
 
-## Usage
+## Video -> meeting notes (one command)
+
+```bash
+python src/app.py "data/raw/talk.mp4"                 # notes + frames
+python src/app.py "data/raw/talk.mp4" --speakers      # + who is speaking
+```
+
+Writes `data/meeting_notes/<video>.md` (summary, each key frame with what was said)
+and the frames to `data/resources/<video>/`. Every notes file starts with the video
+file's fingerprint (`src/videohash.py`), so the video can be found from the notes and
+the notes from the video, even after renaming:
+
+```yaml
+---
+file_size: 220480662                                  # bytes
+quick_hash: 5cfa317d65a6c076...                       # reads only 2 MiB
+quick_hash_method: sha256-size-first-last-1MiB
+full_hash: 56788476f81d23da...                        # whole file
+full_hash_algorithm: sha256
+video: "GraalVMs_Ahead-of-Time_Compilation_(Source).mp4"
+video_id: -3847182915141339802                        # content hash (metadata ignored)
+video_id_method: content
+---
+```
+
+Find one from the other (size first, then quick hash, full hash to confirm):
+
+```bash
+cd src
+python lookup.py notes "../data/raw/talk.mp4"              # video -> its notes
+python lookup.py video "../data/meeting_notes/talk.md"     # notes -> its video
+python lookup.py video notes.md --in D:/archive            # search another folder
+```
+
+## Local website
+
+```bash
+pip install flask
+python src/website/server.py          # then open http://localhost:8000
+```
+
+Drop videos on the page and download their notes (one `.md` with the frames inside).
+The server also saves them in `data/meeting_notes` / `data/resources`. A video that was
+already processed (same id) is returned straight away. Options: `--speakers`,
+`--whisper-model large-v3`, `--no-summary`, `--port`.
+
+## Transcription only
 
 ```bash
 source .venv/bin/activate
+cd src
 
 # Quick sanity check on a laptop (seconds):
-python transcribe.py meeting.mp4 --model base
+python -m transcription.transcribe meeting.mp4 --model base
 
 # Full quality (auto GPU if present, else CPU):
-python transcribe.py meeting.mp4 --model large-v3
+python -m transcription.transcribe meeting.mp4 --model large-v3
 
 # Whole folder of recordings -> a .txt next to each:
-python transcribe.py ./recordings --model large-v3
+python -m transcription.transcribe ./recordings --model large-v3
 
 # Batched (big GPU speedup for high volume):
-python transcribe.py ./recordings --model large-v3 --batched
+python -m transcription.transcribe ./recordings --model large-v3 --batched
 
 # Force a language to skip auto-detect (en, sv, ...):
-python transcribe.py meeting.mp4 --model large-v3 --lang en
+python -m transcription.transcribe meeting.mp4 --model large-v3 --lang en
 ```
 
 Output: one `.txt` per input, with `[start -> end]` timestamps per segment.

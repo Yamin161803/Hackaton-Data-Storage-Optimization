@@ -9,36 +9,51 @@ Pipeline:
 Device auto-detected (CUDA float16 if a GPU is present, else CPU int8) for
 faster-whisper; pyannote uses CUDA if torch sees a GPU, else CPU.
 
-HF token is read from the .hf_token file in this folder (or HF_TOKEN env var).
+HF token is read from the .hf_token file in the project root (or HF_TOKEN env var).
+The pyannote model is gated: accept its terms once on huggingface.co with that account.
+
+Output lines: "[  12.34 ->   18.90] SPEAKER_00: text" (notes.meeting_notes reads these
+with --speakers).
 
 Usage:
-    python diarize.py jre_clip.wav --model large-v3
-    python diarize.py meeting.wav --model large-v3 --num-speakers 3
+    python -m transcription.diarize jre_clip.wav --model large-v3
+    python -m transcription.diarize meeting.wav --model large-v3 --num-speakers 3
+
+From other code:
+    turns = diarize_turns("audio.wav", read_token())   # [(start, end, "SPEAKER_00"), ...]
+    assign_speaker(seg_start, seg_end, turns)          # -> "SPEAKER_00"
 """
+from __future__ import annotations
+
 import argparse
 import os
 import sys
 import time
 from pathlib import Path
 
-import torch
-import numpy as np
-import soundfile as sf
-from faster_whisper import WhisperModel
-from pyannote.audio import Pipeline
+# torch, soundfile, pyannote and faster-whisper are imported inside the functions that
+# need them: they are slow to import and optional for the rest of the project.
 
-HERE = Path(__file__).parent
+HERE = Path(__file__).resolve().parents[2]  # project root
 DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
 
 
-def read_token():
+def find_token() -> str | None:
+    """HF token from $HF_TOKEN or <project root>/.hf_token, or None."""
     tok = os.environ.get("HF_TOKEN")
-    if tok:
+    if tok and tok.strip():
         return tok.strip()
     tok_file = HERE / ".hf_token"
     if tok_file.exists():
-        return tok_file.read_text().strip()
-    sys.exit("ERROR: no HF token (set HF_TOKEN or create .hf_token)")
+        return tok_file.read_text().strip() or None
+    return None
+
+
+def read_token() -> str:
+    tok = find_token()
+    if not tok:
+        sys.exit("ERROR: no HF token (set HF_TOKEN or create .hf_token)")
+    return tok
 
 
 def fw_device():
@@ -61,7 +76,40 @@ def assign_speaker(seg_start, seg_end, turns):
     return best
 
 
+def diarize_turns(audio: str | Path, token: str,
+                  num_speakers: int | None = None) -> list[tuple[float, float, str]]:
+    """Who spoke when: [(start, end, "SPEAKER_00"), ...] for an audio file (wav is best).
+
+    Raises RuntimeError when pyannote isn't installed or the model can't be loaded.
+    """
+    try:
+        import soundfile as sf
+        import torch
+        from pyannote.audio import Pipeline
+    except ImportError as exc:
+        raise RuntimeError("speaker detection needs pyannote.audio and soundfile: "
+                           "pip install pyannote.audio soundfile") from exc
+
+    dia = Pipeline.from_pretrained(DIARIZATION_MODEL, token=token)
+    if dia is None:  # older pyannote returns None instead of raising
+        raise RuntimeError(f"could not load {DIARIZATION_MODEL}; check the HF token and "
+                           "accept the model's terms on huggingface.co")
+    if torch.cuda.is_available():
+        dia.to(torch.device("cuda"))
+    # Load audio in-memory via soundfile (avoids torchcodec / CUDA-lib issues).
+    data, sr = sf.read(str(audio), dtype="float32", always_2d=True)  # (time, ch)
+    waveform = torch.from_numpy(data.T.copy())  # -> (ch, time)
+    kwargs = {"num_speakers": num_speakers} if num_speakers else {}
+    diarization = dia({"waveform": waveform, "sample_rate": sr}, **kwargs)
+    # pyannote v4 returns a DiarizeOutput; the Annotation is .speaker_diarization
+    annotation = getattr(diarization, "speaker_diarization", diarization)
+    return [(seg.start, seg.end, spk)
+            for seg, _, spk in annotation.itertracks(yield_label=True)]
+
+
 def main():
+    from faster_whisper import WhisperModel
+
     p = argparse.ArgumentParser(description="faster-whisper + pyannote diarization")
     p.add_argument("input", help="Audio file (wav recommended)")
     p.add_argument("--model", default="base", help="faster-whisper model size")
@@ -91,20 +139,10 @@ def main():
     # --- 2. diarization ---
     print(f"[2/3] pyannote diarization ({DIARIZATION_MODEL})")
     t1 = time.time()
-    dia = Pipeline.from_pretrained(DIARIZATION_MODEL, token=token)
-    if torch.cuda.is_available():
-        dia.to(torch.device("cuda"))
-    # Load audio in-memory via soundfile (avoids torchcodec / CUDA-lib issues).
-    data, sr = sf.read(str(in_path), dtype="float32", always_2d=True)  # (time, ch)
-    waveform = torch.from_numpy(data.T.copy())  # -> (ch, time)
-    dia_kwargs = {}
-    if args.num_speakers:
-        dia_kwargs["num_speakers"] = args.num_speakers
-    diarization = dia({"waveform": waveform, "sample_rate": sr}, **dia_kwargs)
-    # pyannote v4 returns a DiarizeOutput; the Annotation is .speaker_diarization
-    annotation = getattr(diarization, "speaker_diarization", diarization)
-    turns = [(seg.start, seg.end, spk)
-             for seg, _, spk in annotation.itertracks(yield_label=True)]
+    try:
+        turns = diarize_turns(in_path, token, args.num_speakers)
+    except RuntimeError as exc:
+        sys.exit(f"ERROR: {exc}")
     speakers = sorted(set(t[2] for t in turns))
     print(f"      {len(turns)} turns, {len(speakers)} speakers, took {time.time()-t1:.0f}s")
 
