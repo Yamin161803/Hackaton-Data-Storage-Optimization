@@ -7,7 +7,8 @@ Steps:
   1. video_splitter  - key frames + audio track
   2. transcribe      - speech to text with faster-whisper (GPU if present, else CPU)
      (--speakers)    - who is speaking, with pyannote (transcription/diarize.py)
-  3. meeting_notes   - Markdown: summary (local model via Ollama) + each frame with its text
+  3. meeting_notes   - Markdown: each frame with its text, plus (optional, local model
+                       via Ollama) a summary and search keywords
 
 What is kept:
   data/meeting_notes/<video name>.md      the notes
@@ -20,6 +21,7 @@ Examples:
     python src/app.py talk.mp4
     python src/app.py talk.mp4 --whisper-model large-v3 --lang en
     python src/app.py talk.mp4 -o notes/talk.md --no-summary
+    python src/app.py talk.mp4 --keywords            # + search keywords in the notes
     python src/app.py talk.mp4 --hint "Talk about GraalVM native image"
     python src/app.py meeting.mp4 --speakers --num-speakers 3
 """
@@ -35,10 +37,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from notes.meeting_notes import VideoInfo, build_notes
-from notes.summarize import DEFAULT_MODEL, DEFAULT_URL, Summary, SummaryError, summarize
+from notes.summarize import (DEFAULT_MODEL, DEFAULT_URL, Summary, SummaryError,
+                             extract_keywords, summarize)
 from video_splitter.splitter import (CAMERA_THRESHOLD, DEFAULT_THRESHOLD, MODES,
                                      find_ffmpeg, has_video, split_video)
-from videohash import fingerprint, video_id
+from videohash import fingerprint
 
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 # notes: data/meeting_notes/<video name>.md, frames: data/resources/<video name>/
@@ -102,24 +105,26 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
                batched: bool = False, summary: bool = True, ollama_model: str = DEFAULT_MODEL,
                ollama_url: str = DEFAULT_URL, hint: str | None = None,
                resources_dir: Path | None = None, embed_images: bool = False,
-               speakers: bool = False, num_speakers: int | None = None) -> Path:
+               speakers: bool = False, num_speakers: int | None = None,
+               keywords: bool = False) -> Path:
     """Write the notes to `output` and return its path.
 
     The frames are moved to <resources_dir>/<video name>/ (default: data/resources) and
     linked from the notes, or, with embed_images, put inside the notes and not kept.
     speakers: label who says what (needs pyannote.audio and a Hugging Face token). If
     that fails the notes are still written, without speaker labels.
+    summary / keywords: let the local model (Ollama) write a summary / search keywords.
+    Both are optional; if Ollama fails the notes are still written without them.
     """
     if not video.is_file():
         raise FileNotFoundError(video)
 
     print(f"[0/3] hashing {video.name}...")
     fp = fingerprint(video)
-    vid, method = video_id(video)
-    info = VideoInfo(video.name, vid, method, fp.file_size,
-                     fp.quick_hash, fp.quick_hash_method, fp.full_hash, fp.full_hash_algorithm)
+    info = VideoInfo(fp.file_size, fp.quick_hash, fp.quick_hash_method,
+                     fp.full_hash, fp.full_hash_algorithm)
     print(f"      {fp.file_size} bytes, quick hash {fp.quick_hash[:16]}..., "
-          f"full hash {fp.full_hash[:16]}..., video id {vid} ({method})")
+          f"full hash {fp.full_hash[:16]}...")
 
     with tempfile.TemporaryDirectory(prefix="video_notes_") as tmp:
         work = Path(tmp)
@@ -170,6 +175,18 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
                 print(f"      warning: no summary ({exc})", file=sys.stderr)
                 return None
 
+        def keyworder(text: str) -> list[str] | None:
+            if not keywords or not text.strip():
+                return None
+            print(f"      picking search keywords with {ollama_model} via Ollama...")
+            try:
+                found = extract_keywords(text, model=ollama_model, url=ollama_url, hint=hint)
+                print(f"      keywords: {', '.join(found)}")
+                return found
+            except SummaryError as exc:
+                print(f"      warning: no keywords ({exc})", file=sys.stderr)
+                return None
+
         frames_dir = None
         if not embed_images and not audio_only:
             frames_dir = save_frames(split.frames,
@@ -180,7 +197,8 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
         return build_notes(work, output=output, title=video.stem.replace("_", " "),
                            summarizer=summarizer, embed_images=embed_images,
                            frames_dir=frames_dir, speakers=labelled, video=info,
-                           part_seconds=AUDIO_PART_SECONDS if audio_only else None)
+                           part_seconds=AUDIO_PART_SECONDS if audio_only else None,
+                           keyworder=keyworder)
 
 
 def save_frames(frames, dest: Path) -> Path:
@@ -196,7 +214,8 @@ def save_frames(frames, dest: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
-        description="Turn a raw video into Markdown notes (frames + transcript + summary). "
+        description="Turn a raw video into Markdown notes (frames + transcript, optional "
+                    "summary and keywords). "
                     "Saves the notes and the frames; audio and transcript are not kept.")
     p.add_argument("video", type=Path, help="input video, e.g. talk.mp4")
     p.add_argument("-o", "--output", type=Path,
@@ -223,10 +242,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--num-speakers", type=int,
                    help="exact number of speakers, if known (better speaker labels)")
     p.add_argument("--no-summary", action="store_true", help="skip the Ollama summary")
+    p.add_argument("--keywords", action="store_true",
+                   help="let the Ollama model add search keywords to the notes")
     p.add_argument("--model", default=DEFAULT_MODEL,
-                   help=f"Ollama model for the summary (default: {DEFAULT_MODEL})")
+                   help=f"Ollama model for summary and keywords (default: {DEFAULT_MODEL})")
     p.add_argument("--ollama-url", default=DEFAULT_URL, help=f"default: {DEFAULT_URL}")
-    p.add_argument("--hint", help="context for the summary, e.g. correct spelling of names")
+    p.add_argument("--hint", help="context for summary and keywords, e.g. correct "
+                                  "spelling of names")
     args = p.parse_args(argv)
 
     output = args.output or NOTES_DIR / f"{args.video.stem}.md"
@@ -239,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
                         ollama_model=args.model, ollama_url=args.ollama_url, hint=args.hint,
                         resources_dir=args.resources, embed_images=args.embed_images,
                         speakers=args.speakers or bool(args.num_speakers),
-                        num_speakers=args.num_speakers)
+                        num_speakers=args.num_speakers, keywords=args.keywords)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -16,11 +16,13 @@ const startBtn = $("#startBtn"), clearBtn = $("#clearBtn"), resultBody = $("#res
 const emptyState = $("#emptyState");
 const speakersInput = $("#speakersInput"), numSpeakersInput = $("#numSpeakersInput");
 const numSpeakersLabel = $("#numSpeakersLabel"), speakerOptions = $("#speakerOptions");
+const summaryInput = $("#summaryInput"), keywordsInput = $("#keywordsInput");
 
 /* ---------- Val: vem som pratar ---------- */
 function speakerChoice() {
   const n = parseInt(numSpeakersInput.value, 10);
-  return { speakers: speakersInput.checked, num: speakersInput.checked && n > 0 ? n : null };
+  return { speakers: speakersInput.checked, num: speakersInput.checked && n > 0 ? n : null,
+           summary: summaryInput.checked, keywords: keywordsInput.checked };
 }
 function updateSpeakerOptions() { numSpeakersLabel.hidden = !speakersInput.checked; }
 speakersInput.addEventListener("change", updateSpeakerOptions);
@@ -204,9 +206,9 @@ function renderResult() {
     <div class="is-op-card" data-kind="ok">
       <strong>${it.cached ? "Videon fanns redan – sparade anteckningar" : "Klar att ladda ner"}</strong>
       ${it.choice && it.choice.speakers && !it.warning ? "Med talare. " : ""}
-      Sparas som <span class="is-mono is-token">${escapeHtml(it.outName)}</span>${it.fileId ? `<br>Video-id <span class="is-mono is-token">${escapeHtml(it.fileId)}</span>` : ""}
+      Sparas som <span class="is-mono is-token">${escapeHtml(it.outName)}</span>${it.fileId ? `<br>SHA-256 <span class="is-mono is-token" title="${escapeHtml(it.fileId)}">${escapeHtml(it.fileId.slice(0, 16))}…</span>` : ""}
     </div>
-    ${it.warning ? `<div class="is-op-card" data-kind="error"><strong>Utan talare</strong>${escapeHtml(it.warning)}</div>` : ""}
+    ${it.warning ? `<div class="is-op-card" data-kind="error"><strong>Något saknas</strong>${escapeHtml(it.warning)}</div>` : ""}
     <div class="is-actions">
       <button class="is-btn" id="dlBtn" type="button">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg>
@@ -279,6 +281,8 @@ function uploadOne(it) {
     it.choice = speakerChoice();               // valet när filen skickas
     fd.append("speakers", it.choice.speakers ? "1" : "0");
     if (it.choice.num) fd.append("num_speakers", String(it.choice.num));
+    fd.append("summary", it.choice.summary ? "1" : "0");
+    fd.append("keywords", it.choice.keywords ? "1" : "0");
     it.status = "uploading"; it.progress = 0; render();
     xhr.send(fd);
   });

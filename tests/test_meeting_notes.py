@@ -47,7 +47,7 @@ def test_output_layout(tmp_path):
     assert md_path == split / "notes.md"
     md = md_path.read_text(encoding="utf-8")
     assert md.startswith("# My talk\n")
-    assert "3 frames · 00:00:35 long" in md
+    assert "frames ·" not in md                   # no info line under the title
     assert "## 2. 00:00:10 – 00:00:25" in md
     assert "## 3. 00:00:25 – 00:00:35" in md
     assert "![Frame at 00:00:10](frames/frame_2.jpg)" in md
@@ -221,7 +221,7 @@ def test_read_transcript_ignores_labels_unless_asked(tmp_path):
 def test_notes_group_text_by_speaker(tmp_path):
     split = make_split_dir(tmp_path, [0, 11], DIARIZED)
     md = build_notes(split, speakers=True).read_text(encoding="utf-8")
-    assert "2 frames · 00:00:14 long · 2 speakers" in md
+    assert md.startswith("---\nspeakers: 2\n---\n\n# ")
     one = md.split("## 1.")[1].split("## 2.")[0]
     assert ("**Speaker 1:** Hello and welcome. I am the host.\n\n"
             "**Speaker 2:** Thanks for having me.\n\n"
@@ -246,3 +246,60 @@ def test_transcript_text_without_speakers_is_plain(tmp_path):
     segs = read_transcript(split / "audio.txt")
     assert transcript_text(segs).startswith("Hello and welcome. This is the intro.")
     assert speaker_blocks(segs) == [(None, " ".join(s.text for s in segs))]
+
+
+# ---------- keywords ----------
+
+from notes.summarize import clean_keywords, extract_keywords  # noqa: E402
+
+
+def test_extract_keywords(monkeypatch):
+    requests = fake_ollama(monkeypatch, '{"keywords": ["GraalVM", " native  image ", "graalvm", ""]}')
+    assert extract_keywords("we talk about graal vm and native image", model="m") == [
+        "GraalVM", "native image"]
+    req = requests[0]
+    assert req["model"] == "m" and req["format"]["required"] == ["keywords"]
+    assert "search keywords" in req["messages"][0]["content"]
+
+
+def test_extract_keywords_long_transcript_picks_from_all_parts(monkeypatch):
+    replies = iter(['{"keywords": ["a1", "a2"]}', '{"keywords": ["b1", "a1"]}',
+                    '{"keywords": ["c1"]}', '{"keywords": ["b1", "a1"]}'])
+    requests = []
+
+    def urlopen(req, timeout=None):
+        requests.append(json.loads(req.data))
+        return io.BytesIO(json.dumps({"message": {"content": next(replies)}}).encode())
+    monkeypatch.setattr(summarize_mod.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(summarize_mod, "CHUNK_WORDS", 3)
+
+    out = extract_keywords("one two three four five six seven", limit=2)  # 3 parts
+
+    assert out == ["b1", "a1"]
+    assert len(requests) == 4                       # 3 parts + 1 "choose the best"
+    final = requests[-1]["messages"][1]["content"]
+    assert "Choose the 2" in final and "- a1\n- a2\n- b1\n- c1" in final
+
+
+def test_extract_keywords_few_candidates_skip_the_final_call(monkeypatch):
+    requests = fake_ollama(monkeypatch, '{"keywords": ["x"]}')
+    monkeypatch.setattr(summarize_mod, "CHUNK_WORDS", 3)
+    assert extract_keywords("one two three four five six") == ["x"]
+    assert len(requests) == 2                       # 2 parts, nothing to choose between
+
+
+def test_extract_keywords_errors(monkeypatch):
+    with pytest.raises(SummaryError, match="empty"):
+        extract_keywords("   ")
+    fake_ollama(monkeypatch, '{"words": []}')
+    with pytest.raises(SummaryError, match="keywords"):
+        extract_keywords("text")
+    fake_ollama(monkeypatch, error=urllib.error.URLError("refused"))
+    with pytest.raises(SummaryError, match="Is Ollama running"):
+        extract_keywords("text")
+
+
+def test_clean_keywords():
+    assert clean_keywords(['"JVM",', "jvm", "  ", "Native   Image", "#tag"], limit=10) == [
+        "JVM", "Native Image", "tag"]
+    assert clean_keywords([f"k{i}" for i in range(20)], limit=3) == ["k0", "k1", "k2"]
