@@ -32,6 +32,22 @@ REL_SHORTENED = 2  # child is a subset of parent (removed pages)
 REL_REORDERED = 3  # same page set, different order
 REL_MODIFIED = 4   # overlapping but neither subset nor superset
 
+# image format codes (match the existing `image` table: 1=avif 2=jxl 3=webp 4=jpeg 5=png)
+_FMT_BY_EXT = {".avif": 1, ".jxl": 2, ".webp": 3, ".jpg": 4, ".jpeg": 4, ".png": 5}
+
+
+def _image_ext(data: bytes) -> str:
+    """Guess an image file extension from magic bytes (png/jpeg/webp/gif)."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    return ".bin"
+
 
 # ---------- hashing (mirrors videohash.py conventions) ----------
 
@@ -137,10 +153,14 @@ class IngestResult:
 # ---------- store ----------
 
 class Store:
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, objects_dir: str | Path | None = None):
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        # Image blobs live on disk, content-addressed and sharded by hash prefix.
+        # Default: an "objects" dir next to the database file.
+        self.objects_dir = Path(objects_dir) if objects_dir else \
+            Path(db_path).resolve().parent / "objects"
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
@@ -305,3 +325,90 @@ class Store:
                 "(parent_id, child_id, relation, added, removed) VALUES (?,?,?,?,?)",
                 (parent_id, child_id, relation, added, removed),
             )
+
+    # -- shared image object store --
+
+    def put_image(self, data: bytes, width: int | None = None,
+                  height: int | None = None) -> str:
+        """Store image bytes once, content-addressed. Returns the full hex hash.
+
+        If an image with the same bytes is already stored, nothing is written
+        (dedup): 100 documents sharing one picture keep a single blob on disk.
+        """
+        hex_hash = hashlib.sha256(data).hexdigest()
+        # already stored?
+        row = self.conn.execute(
+            "SELECT 1 FROM image_hash WHERE hash = ?", (hex_hash,)
+        ).fetchone()
+        if row:
+            return hex_hash
+
+        image_id = _id_from_hash(hex_hash)
+        ext = _image_ext(data)
+        fmt = _FMT_BY_EXT.get(ext, 0)
+        # sharded path: objects/ab/cd/<hash><ext> keeps any dir small at scale.
+        rel = Path(hex_hash[:2]) / hex_hash[2:4] / f"{hex_hash}{ext}"
+        dest = self.objects_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+
+        # image.id is a PRIMARY KEY; guard against the rare 8-byte-prefix clash.
+        self.conn.execute(
+            "INSERT OR IGNORE INTO image (id, path, fmt, size, width, height) "
+            "VALUES (?,?,?,?,?,?)",
+            (image_id, str(rel), fmt, len(data), width, height),
+        )
+        self.conn.execute(
+            "INSERT OR IGNORE INTO image_hash (hash, image_id) VALUES (?, ?)",
+            (hex_hash, image_id),
+        )
+        self.conn.commit()
+        return hex_hash
+
+    def link_page_images(self, page_hash: str, image_hashes: list[str]) -> None:
+        """Record which images (by full hex hash) a page references, in order."""
+        for position, ih in enumerate(image_hashes):
+            self.conn.execute(
+                "INSERT OR REPLACE INTO page_image (page_hash, image_hash, position) "
+                "VALUES (?,?,?)",
+                (page_hash, ih, position),
+            )
+        self.conn.commit()
+
+    def image_path(self, image_hash: str) -> Path | None:
+        """Absolute path to a stored image blob, by its full hex hash."""
+        row = self.conn.execute(
+            "SELECT i.path FROM image_hash h JOIN image i ON i.id = h.image_id "
+            "WHERE h.hash = ?", (image_hash,)
+        ).fetchone()
+        return (self.objects_dir / row["path"]) if row else None
+
+    def image_refcount(self, image_hash: str) -> int:
+        """How many pages reference this image (0 = safe to delete)."""
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM page_image WHERE image_hash = ?", (image_hash,)
+        ).fetchone()[0]
+
+    def reconstruct(self, document_id: int) -> list[dict]:
+        """Everything needed to rebuild a document, in order.
+
+        Returns a list of page dicts: {"position", "page_hash", "text",
+        "images": [absolute image paths]} — the text plus the single stored copy
+        of each referenced picture, so the original PDF/deck can be remade.
+        """
+        rows = self.conn.execute(
+            "SELECT dp.position, p.hash, p.text FROM document_page dp "
+            "JOIN page p ON p.hash = dp.page_hash "
+            "WHERE dp.document_id = ? ORDER BY dp.position",
+            (document_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            imgs = self.conn.execute(
+                "SELECT image_hash FROM page_image WHERE page_hash = ? ORDER BY position",
+                (r["hash"],),
+            ).fetchall()
+            paths = [str(self.image_path(i["image_hash"])) for i in imgs]
+            out.append({"position": r["position"], "page_hash": r["hash"],
+                        "text": r["text"], "images": paths})
+        return out
