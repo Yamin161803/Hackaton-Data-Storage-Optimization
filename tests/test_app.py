@@ -69,7 +69,8 @@ def test_make_notes_saves_notes_and_frames(tmp_path, fake_transcribe, resources_
     assert head[3] == "quick_hash_method: sha256-size-first-last-1MiB"
     assert head[4] == f"full_hash: {full}"
     assert head[5] == "full_hash_algorithm: sha256"
-    assert head[6] == 'video: "My_talk.mp4"' and head[7].startswith("video_id: ")
+    assert len(head) == 6                       # no video name / video id any more
+    assert "frames ·" not in text and "Video: `" not in text
     assert "\n---\n\n# My talk\n" in text
     assert "base64" not in text
     one, two = text.split("## 1.")[1].split("## 2.")
@@ -150,8 +151,8 @@ def test_make_notes_passes_mode_to_splitter(tmp_path, fake_transcribe):
     video = make_video(tmp_path / "v.mp4", [("black", 2), (f"black,{BOX}", 2)])
     slides = app.make_notes(video, tmp_path / "a.md", summary=False, mode="presentation")
     camera = app.make_notes(video, tmp_path / "b.md", summary=False, mode="camera")
-    assert "\n# v\n\n2 frames" in slides.read_text(encoding="utf-8")
-    assert "\n# v\n\n1 frames" in camera.read_text(encoding="utf-8")
+    assert "\n## 2. " in slides.read_text(encoding="utf-8")       # 2 frames
+    assert "\n## 2. " not in camera.read_text(encoding="utf-8")   # 1 frame
 
 
 def test_make_notes_missing_video(tmp_path):
@@ -182,7 +183,7 @@ def test_make_notes_with_speakers(tmp_path, fake_transcribe, fake_diarize):
     text = app.make_notes(video, tmp_path / "v.md", summary=False, speakers=True,
                           num_speakers=2).read_text(encoding="utf-8")
     assert calls == [("audio.wav", "tok", 2)]
-    assert "· 2 speakers" in text
+    assert "\nspeakers: 2\n" in text.split("\n---\n", 1)[0] + "\n"
     assert "**Speaker 1:** First slide talk." in text
     assert "**Speaker 2:** Second slide talk." in text
 
@@ -396,7 +397,7 @@ def test_audio_only_file_gives_notes_in_parts(tmp_path, monkeypatch, resources_i
     md = app.make_notes(podcast, tmp_path / "notes" / "p.md", summary=False)
 
     text = md.read_text(encoding="utf-8")
-    assert "audio only · 3 parts · 00:10:55 long" in text
+    assert text.count("\n## ") == 3                                 # three 5-min parts
     assert "![" not in text and not resources_in_tmp.exists()     # no frames anywhere
     assert "## 1. 00:00:00 – 00:05:00" in text and "## 3. 00:10:00 – 00:10:55" in text
     one, two = text.split("## 2.")[0], text.split("## 2.")[1].split("## 3.")[0]
@@ -410,4 +411,51 @@ def test_build_notes_parts_without_frames(tmp_path):
     split.mkdir()
     (split / "audio.txt").write_text("[   0.00 ->    1.00] Hi.\n", encoding="utf-8")
     text = meeting_notes.build_notes(split, part_seconds=300).read_text(encoding="utf-8")
-    assert "audio only · 1 parts" in text and "Hi." in text and "![" not in text
+    assert "## 1. 00:00:00 – 00:00:01" in text and "Hi." in text and "![" not in text
+
+
+# ---------- optional keywords ----------
+
+def test_make_notes_with_keywords(tmp_path, fake_transcribe, monkeypatch):
+    seen = {}
+
+    def fake_keywords(text, model, url, hint):
+        seen.update(text=text, model=model)
+        return ["slides", "demo"]
+    monkeypatch.setattr(app, "extract_keywords", fake_keywords)
+    video = make_video(tmp_path / "v.mp4", [("black", 2)])
+    text = app.make_notes(video, tmp_path / "v.md", summary=False, keywords=True,
+                          ollama_model="m2").read_text(encoding="utf-8")
+    assert 'keywords: ["slides", "demo"]' in text.split("\n---\n", 1)[0]
+    assert seen == {"text": "First slide talk. Second slide talk.", "model": "m2"}
+    assert "## Summary" not in text
+
+
+def test_keywords_off_by_default_and_ollama_failure(tmp_path, fake_transcribe, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, "extract_keywords", lambda *a, **k: calls.append(1) or ["x"])
+    video = make_video(tmp_path / "v.mp4", [("black", 2)])
+    text = app.make_notes(video, tmp_path / "a.md", summary=False).read_text(encoding="utf-8")
+    assert calls == [] and "keywords" not in text
+
+    def broken(*a, **k):
+        raise SummaryError("can't reach Ollama")
+    monkeypatch.setattr(app, "extract_keywords", broken)
+    text = app.make_notes(video, tmp_path / "b.md", summary=False, keywords=True) \
+        .read_text(encoding="utf-8")
+    assert "keywords" not in text and "First slide talk." in text
+
+
+def test_main_keywords_flag(tmp_path, monkeypatch):
+    got = {}
+
+    def fake_make_notes(video, output, **kwargs):
+        got.update(kwargs)
+        output = tmp_path / "w.md"
+        output.write_text("x")
+        return output
+    monkeypatch.setattr(app, "make_notes", fake_make_notes)
+    assert app.main(["v.mp4"]) == 0
+    assert got["keywords"] is False and got["summary"] is True
+    assert app.main(["v.mp4", "--keywords", "--no-summary"]) == 0
+    assert got["keywords"] is True and got["summary"] is False
