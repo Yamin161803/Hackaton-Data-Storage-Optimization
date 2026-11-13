@@ -144,3 +144,46 @@ def test_change_ratio():
 def test_format_timestamp():
     assert format_timestamp(0) == "00:00:00.000"
     assert format_timestamp(3723.4567) == "01:02:03.457"
+
+
+# A white box sliding across the picture: the image changes a little on every frame, like
+# a person moving in front of a camera. Then a cut to a white picture (a real scene change).
+MOVING = ("black,format=gray,"
+          "geq=lum='255*between(X,T*16,T*16+16)*between(Y,18,30)'")
+
+
+def test_slides_are_detected_as_presentation(tmp_path):
+    video = make_video(tmp_path / "v.mp4", [("black", 3), ("white", 3), ("black", 3)])
+    result = split_video(video, tmp_path / "out")
+    assert result.mode == "presentation"
+    assert result.threshold == pytest.approx(0.05)
+    assert result.motion < 0.1
+
+
+def test_constant_motion_is_detected_as_camera_and_uses_high_threshold(tmp_path):
+    video = make_video(tmp_path / "v.mp4", [(MOVING, 3), ("white", 2)])
+    result = split_video(video, tmp_path / "out")
+    assert result.mode == "camera"
+    assert result.motion > 0.5
+    assert result.threshold == pytest.approx(0.4)
+    # only the first frame and the cut, not one frame per box movement
+    assert times(result) == pytest.approx([0, 3])
+
+
+def test_forced_mode(tmp_path):
+    video = make_video(tmp_path / "v.mp4", [(MOVING, 3), ("white", 2)])
+    presentation = split_video(video, tmp_path / "a", mode="presentation")
+    assert presentation.mode == "presentation"
+    assert presentation.frame_count > 3          # the moving box keeps triggering
+
+    slides = make_video(tmp_path / "s.mp4", [("black", 2), (f"black,{BOX}", 2)])
+    camera = split_video(slides, tmp_path / "b", mode="camera")
+    assert camera.mode == "camera"
+    assert times(camera) == pytest.approx([0])   # 6 % change is below 40 %
+
+
+def test_invalid_mode_settings(tmp_path):
+    video = make_video(tmp_path / "v.mp4", [("black", 1)])
+    for kwargs in ({"mode": "faces"}, {"camera_threshold": 0}, {"camera_threshold": 2}):
+        with pytest.raises(ValueError):
+            split_video(video, tmp_path / "out", **kwargs)
