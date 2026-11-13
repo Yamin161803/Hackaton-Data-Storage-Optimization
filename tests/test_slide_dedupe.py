@@ -1,12 +1,16 @@
 
 
-"""Run with: python -m pytest test_slide_dedupe_v2.py  (or python test_slide_dedupe_v2.py)"""
+"""Tests for src/dedupe/slide_dedupe.py. Run with: python -m pytest tests/test_slide_dedupe.py"""
 import json
+import sys
 import tempfile
 from pathlib import Path
 
-import slide_dedupe_v2
-from slide_dedupe_v2 import ContentMatcher, SlideIndex, file_slide_hashes, main, normalize_text, QUICK_CHUNK
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from dedupe import slide_dedupe as slide_dedupe_v2  # noqa: E402
+from dedupe.slide_dedupe import (ContentMatcher, SlideIndex, file_slide_hashes,  # noqa: E402
+                                    main, normalize_text, QUICK_CHUNK)
 
 
 def _all(index):

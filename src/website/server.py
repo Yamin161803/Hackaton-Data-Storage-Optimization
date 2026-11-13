@@ -3,6 +3,7 @@ Backend för webbsidan: ladda upp en video, få tillbaka anteckningar.
 
 Innehåller:
   - URL:en /api/compress som function.js skickar filen till
+  - sidan /dedupe (Rensa dubbletter) med URL:erna i website/dedupe_api.py
   - ta_emot_fil()     – sparar den uppladdade filen i en tillfällig mapp
   - komprimera()      – gör anteckningar av videon med samma pipeline som src/app.py
   - skicka_tillbaka() – skickar anteckningarna tillbaka till webbsidan
@@ -51,6 +52,7 @@ from lookup import notes_for_video  # noqa: E402
 from notes.meeting_notes import (embed_local_images, has_summary,  # noqa: E402
                                  read_front_matter, read_keywords, read_speaker_count)
 from videohash import Fingerprint, fingerprint  # noqa: E402
+from website.dedupe_api import bp as dedupe_bp  # noqa: E402  (sidan Rensa dubbletter)
 
 VIDEO_ENDELSER = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 
@@ -71,6 +73,7 @@ _PIPELINE_LAS = threading.Lock()
 
 app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_MB * 1024 * 1024
+app.register_blueprint(dedupe_bp)
 
 
 # ------------------------------------------------------------------
@@ -80,7 +83,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_MB * 1024 * 1024
 @app.after_request
 def lagg_till_cors(svar):
     svar.headers["Access-Control-Allow-Origin"] = "*"
-    svar.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    svar.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     svar.headers["Access-Control-Allow-Headers"] = "Content-Type"
     svar.headers["Access-Control-Expose-Headers"] = "Content-Disposition, X-File-Id, X-Cached, X-Warning"
     return svar
@@ -268,9 +271,14 @@ def index():
     return send_from_directory(STATIC_DIR, "index.html")
 
 
+@app.route("/dedupe")
+def dedupe_sida():
+    return send_from_directory(STATIC_DIR, "dedupe.html")
+
+
 @app.route("/<path:namn>")
 def statiska_filer(namn):
-    if namn in ("style.css", "function.js"):
+    if namn in ("index.html", "style.css", "function.js", "dedupe.html", "dedupe.js"):
         return send_from_directory(STATIC_DIR, namn)
     return jsonify(detail="Hittades inte."), 404
 
