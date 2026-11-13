@@ -1,1 +1,33 @@
 # Hackaton-Data-Storage-Optimization
+
+Always image by reference (never embedding):
+ * Reuse images (including slides)
+ * Remove slides without unique content
+
+Adaptive video sampling:
+ * Interpolation gets less reliable when framerates are low.
+ * Solution: Measure screen movement and adapt sampling rate to screen change rate. Keep timestamps.
+ * Lots of pixels changed: Screenshot faster.
+ * Very few pixels changed: Screenshow slower.
+
+Video to text (transcript and possibly description)
+Video to sample (screenshots throughout the video)
+Pdf to markdown with shared images (by reference)
+
+I pdf och slides kan vi se om det finns sidor där hashen matchar. Vi kan spara förändringarna (basically version control).
+
+Videos är att ta bort videos. De vill inte ha dem. MEN man måste kunna kolla om man redan sparat informationen.
+Vi måste hitta någon väldigt specifik identifier för videorna.
+Man ska kunna skanna en ny video, jämföra den med alla andra videor vi sparat, och om vi redan sparat den så kastar vi den.
+
+
+För videor:
+ * Hasha videon, få sträng av bokstäver, använd hash som nyckelvärde när vi lagrar videon
+
+
+
+
+
+
+
+
