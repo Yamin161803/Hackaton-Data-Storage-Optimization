@@ -85,22 +85,7 @@ pip install --force-reinstall torch torchaudio --index-url https://download.pyto
 This is a ~2.5 GB download. Afterwards `check` shows "speaker labels run on: GPU".
 If the GPU runs out of memory, speaker detection falls back to the CPU by itself.
 
-## 2. Try it with the sample files
-
-[samples/](samples/README.md) has small files cut from the hackathon material, about
-24 MB in total:
-
-```bash
-python run.py notes samples/video/graalvm_talk_clip.mp4            # slide talk, ~20 s
-python run.py notes samples/video --keywords                       # all three clips
-python run.py dedupe samples/docs --mode batch --index samples_index.json
-python run.py pdf samples/docs/C2L_Presentation_short.pdf --out data/docs
-```
-
-[samples/README.md](samples/README.md) says what each file tests and which results to
-expect, e.g. that dedupe finds 2 of the 6 documents unnecessary and would save 5.5 MB.
-
-## 3. The website (easiest)
+## 2. The website (easiest)
 
 ```bash
 python run.py web
@@ -113,7 +98,7 @@ Ctrl+C.
 - **Video notes** (`/`): drop videos or a folder, tick summary / keywords / speakers,
   press start, and download the notes. A video that was already processed is returned
   straight away.
-- **Remove duplicates** (`/dedupe`): pick a folder (e.g. `samples/docs`) and see which
+- **Remove duplicates** (`/dedupe`): pick a folder (e.g. `data/raw`) and see which
   PDF / PowerPoint / image files can go without losing a unique slide, and how much
   space that frees. The PDFs and decks are also added to the document store, and new
   versions of a document show their version tree. *Clear the version store* empties it.
@@ -121,13 +106,12 @@ Ctrl+C.
   space saved. Download any version, restored from the store.
 
 The pages are in English. Click **SV** in the header for Swedish (**EN** switches back);
-the browser remembers the choice. The version-store parts and the Versions page are
-English only so far.
+the browser remembers the choice.
 
 Extra options are passed to the server: `--port`, `--whisper-model`, `--no-summary`,
 `--keywords`, `--speakers`.
 
-## 4. Meeting notes from the command line
+## 3. Meeting notes from the command line
 
 ```bash
 python run.py notes data/raw/talk.mp4                  # one video
@@ -156,7 +140,7 @@ Useful options (all from `src/app.py`; see `python src/app.py -h`):
 | `--embed-images` | put the frames inside the `.md` (one self-contained file) |
 | `-o notes.md`, `--resources folder` | write the notes and frames somewhere else |
 
-## 5. Duplicate slides and documents
+## 4. Duplicate slides and documents
 
 ```bash
 python run.py dedupe                                    # checks data/raw, report only
@@ -167,20 +151,20 @@ python run.py dedupe data/raw --mode batch --trash data/trash   # move the dupli
 Without `--trash` nothing is moved. The tool remembers what it has seen in
 `data/slide_index.json`; add `--index some/other.json` for a separate test run.
 
-## 6. Document store and search
+## 5. Document store and search
 
 The website's **Remove duplicates** page fills the store. You can also add files and
 search them from the command line:
 
 ```bash
 cd src
-python -m store.ingest_files ../data/database ../samples/docs/*    # add files
+python -m store.ingest_files ../data/database ../data/raw/*.pdf  # add files
 python store/search.py find "orchestration"                       # full-text search
 python store/search.py docs --sort size                           # list documents
 python store/search.py versions <document_id>                     # version relations
 ```
 
-## 7. Other tools
+## 6. Other tools
 
 ```bash
 python run.py pdf data/raw/deck.pdf --out data/docs     # PDF -> Markdown, images saved once

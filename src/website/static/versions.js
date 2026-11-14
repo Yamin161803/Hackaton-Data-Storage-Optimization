@@ -21,7 +21,7 @@ function human(n) {
   if (n == null) return "–";
   const u = ["B", "KB", "MB", "GB"]; let i = 0, v = n;
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-  return (i === 0 ? v : v.toFixed(1)) + " " + u[i];
+  return fmtLocal(v, i === 0 ? 0 : 1) + " " + u[i];
 }
 function esc(s) { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
 function shortName(n) { return n.length > 26 ? n.slice(0, 24) + "…" : n; }
@@ -46,13 +46,13 @@ async function loadFamilies() {
   const list = $("#famList");
   let fams = [];
   try { fams = (await (await fetch("/api/tree/families")).json()).families || []; }
-  catch (e) { list.innerHTML = `<p class="is-field__hint">Could not load families.</p>`; return; }
-  if (!fams.length) { list.innerHTML = `<p class="is-placeholder">No documents stored yet. Run a dedupe analysis first.</p>`; return; }
+  catch (e) { list.innerHTML = `<p class="is-field__hint">${t("fam_load_failed")}</p>`; return; }
+  if (!fams.length) { list.innerHTML = `<p class="is-placeholder">${t("fam_empty")}</p>`; return; }
   list.innerHTML = fams.map(f => `
     <div class="is-fam-row" role="row" data-root="${esc(f.root)}">
       <span class="is-chip">${esc(f.source_type.toUpperCase())}</span>
       <span class="is-fam-row__name">${esc(f.name)}</span>
-      <span class="is-fam-row__meta">${f.size} version${f.size === 1 ? "" : "s"}</span>
+      <span class="is-fam-row__meta">${t("n_versions", { n: f.size })}</span>
       <span class="is-fam-row__saved">${f.saved_bytes ? "−" + human(f.saved_bytes) : ""}</span>
     </div>`).join("");
   list.onclick = (e) => { const row = e.target.closest("[data-root]"); if (row) selectFamily(row.dataset.root); };
@@ -60,7 +60,7 @@ async function loadFamilies() {
   // pick from ?doc= deep link, else the first family
   const params = new URLSearchParams(location.search);
   const want = params.get("doc");
-  selectFamily(want || fams[0].root);
+  selectFamily(_selectedRoot || want || fams[0].root);
 }
 
 async function selectFamily(rootOrDocId) {
@@ -76,14 +76,24 @@ async function selectFamily(rootOrDocId) {
     fam = await resp.json();
   } catch (e) { return; }
   _fam = fam;
-  $("#graphName").textContent = fam.nodes[0] ? fam.nodes[0].name : "Version graph";
+  $("#graphName").textContent = fam.nodes[0] ? fam.nodes[0].name : t("vg_title");
   ensureChart();
   draw(fam);
   const s = fam.savings || {};
-  $("#treeSavings").innerHTML = `Saved <b>${human(s.saved_bytes)}</b> (${(s.saved_percent || 0).toFixed(1)} % of ${human(s.full_bytes)})`;
+  $("#treeSavings").innerHTML = t("vg_saved", { saved: human(s.saved_bytes), pct: fmtLocal(s.saved_percent || 0, 1), full: human(s.full_bytes) });
 }
 
 /* ---------- graph ---------- */
+/* "shortened: +0 / −11 pages" in the page language. */
+function changeText(e) {
+  const rel = t("rel_" + e.relation);
+  return t("rel_change", { rel: rel === "rel_" + e.relation ? e.relation : rel,
+                           added: e.added, removed: e.removed });
+}
+function nodeChange(edge, d) {
+  return edge ? changeText(edge) : t(d._selected ? "added_now" : "original_version");
+}
+
 /* Build ECharts GRAPH data (nodes + links). A version family is a DAG — it can
    have multiple roots and branches — so a `tree` series (single root) dropped
    most nodes. A `graph` series shows ALL nodes and their relationships. */
@@ -122,11 +132,10 @@ function draw(fam) {
       trigger: "item",
       formatter: (p) => {
         if (p.dataType === "edge") {
-          return `${p.data._rel}: +${p.data._added} / −${p.data._removed} pages`;
+          return changeText({ relation: p.data._rel, added: p.data._added, removed: p.data._removed });
         }
         const d = p.data, e = (fam.edges || []).find(x => String(x.child) === d.id);
-        const change = e ? `${e.relation}: +${e.added} / −${e.removed} pages` : (d._selected ? "added now" : "original version");
-        return `<b>${esc(d._full)}</b><br>${d._pages} pages<br>${(d._date || "").slice(0, 10)}<br>${change}`;
+        return `<b>${esc(d._full)}</b><br>${t("n_pages", { n: d._pages })}<br>${(d._date || "").slice(0, 10)}<br>${nodeChange(e, d)}`;
       },
     },
     series: [{
@@ -149,20 +158,20 @@ function draw(fam) {
 function openPopover(d) {
   const pop = $("#nodePopover");
   const e = (_fam.edges || []).find(x => x.child === d._id);
-  const change = e ? `${e.relation}: +${e.added} / −${e.removed} pages` : (d._selected ? "added now" : "original version");
+  const change = nodeChange(e, d);
   pop.innerHTML = `
-    <button class="is-pop-close" id="popClose" aria-label="Close">×</button>
+    <button class="is-pop-close" id="popClose" aria-label="${t("close")}">×</button>
     <div class="is-pop-name">${esc(d._full)}</div>
     <dl class="is-kv">
-      <dt>Pages</dt><dd>${d._pages}</dd>
-      <dt>Date</dt><dd>${(d._date || "").slice(0, 19).replace("T", " ")}</dd>
-      <dt>Change</dt><dd>${change}</dd>
-      ${d._selected ? "<dt>Status</dt><dd>Added now</dd>" : ""}
+      <dt>${t("k_pages")}</dt><dd>${d._pages}</dd>
+      <dt>${t("k_date")}</dt><dd>${(d._date || "").slice(0, 19).replace("T", " ")}</dd>
+      <dt>${t("k_change")}</dt><dd>${change}</dd>
+      ${d._selected ? `<dt>${t("k_status")}</dt><dd>${t("status_added")}</dd>` : ""}
     </dl>
-    <button class="is-btn is-btn--sm" id="popDl">Download this version</button>`;
+    <button class="is-btn is-btn--sm" id="popDl">${t("download_version")}</button>`;
   pop.hidden = false;
   $("#popClose").onclick = () => { pop.hidden = true; _clickedId = null; draw(_fam); };
-  $("#popDl").onclick = () => { window.location = `/api/tree/${d._id}/download`; };
+  $("#popDl").onclick = () => { window.location = `/api/tree/${d._id}/download?lang=${LANG}`; };
 }
 
 /* ---------- toolbar ---------- */
@@ -182,4 +191,8 @@ $("#treeFull").addEventListener("click", () => {
 });
 document.addEventListener("fullscreenchange", () => setTimeout(() => _chart && _chart.resize(), 150));
 
+/* language switch: rebuild what JS wrote (the static texts are done by i18n.js) */
+document.addEventListener("langchange", loadFamilies);   // keeps the selected family
+
+$("#graphName").textContent = t("vg_title");
 loadFamilies();

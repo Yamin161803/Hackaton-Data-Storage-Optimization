@@ -23,6 +23,7 @@ from flask import Blueprint, jsonify, send_file
 from store import Store
 from store.version_tree import family_with_savings, all_families
 from store.regenerate import regenerate
+from website.i18n import msg
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DB_PATH = PROJECT_DIR / "data" / "database"
@@ -75,14 +76,14 @@ def tree(doc_id):
     try:
         doc_id = int(doc_id)
     except ValueError:
-        return jsonify(detail="Invalid document id"), 400
+        return jsonify(detail=msg("bad_doc_id")), 400
     s = _store()
     try:
         fam = family_with_savings(s, doc_id)
     finally:
         s.close()
     if not fam:
-        return jsonify(detail=f"No document with id {doc_id}"), 404
+        return jsonify(detail=msg("no_doc", doc_id=doc_id)), 404
     fam["selected"] = str(doc_id)     # the node the UI should highlight (string: 64-bit safe)
     return jsonify(fam)
 
@@ -97,14 +98,14 @@ def download_node(doc_id):
     try:
         doc_id = int(doc_id)
     except ValueError:
-        return jsonify(detail="Invalid document id"), 400
+        return jsonify(detail=msg("bad_doc_id")), 400
     s = _store()
     try:
         row = s.conn.execute(
             "SELECT source_type, source_name FROM document WHERE id = ?", (doc_id,)
         ).fetchone()
         if row is None:
-            return jsonify(detail=f"No document with id {doc_id}"), 404
+            return jsonify(detail=msg("no_doc", doc_id=doc_id)), 404
         source_type = {1: "pdf", 2: "pptx"}.get(row["source_type"], "?")
         name = row["source_name"]
 

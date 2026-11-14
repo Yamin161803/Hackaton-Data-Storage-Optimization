@@ -15,8 +15,7 @@ what's in them.
   picture shared by many files is stored once, new versions of a deck are linked into a
   version tree, the text is searchable, and every file can be restored (PDFs
   pixel-identical).
-- **A local website** that does all of this from the browser (English, with a Swedish
-  option).
+- **A local website** that does all of this from the browser, in English or Swedish.
 
 Everything runs locally: speech to text uses faster-whisper (GPU if present, otherwise
 CPU), and summaries and keywords come from a local model through Ollama.
@@ -29,17 +28,14 @@ python run.py check     # what is ready, what is missing
 python run.py web       # the website: http://localhost:8000
 ```
 
-Small test files are in [samples/](samples/README.md): three 90-second video clips, an
-audio clip, and PDFs and decks with a planted exact copy, a shortened version and a
-newer version. For example:
+Put your recordings and documents in `data/raw/` (not in git), then for example:
 
 ```bash
-python run.py notes samples/video/graalvm_talk_clip.mp4           # meeting notes
-python run.py dedupe samples/docs --mode batch --index samples_index.json
+python run.py notes data/raw/talk.mp4              # meeting notes
+python run.py dedupe data/raw                      # duplicate slides/documents
 ```
 
-[samples/README.md](samples/README.md) lists what each file tests and the expected
-results. [HOW_TO_RUN.md](HOW_TO_RUN.md) covers every command and option, plus
+[HOW_TO_RUN.md](HOW_TO_RUN.md) covers every command and option, plus
 troubleshooting. The rest of this README explains how the tools work.
 
 ## Setup
@@ -191,12 +187,10 @@ each time. The PDFs and decks are also added to the document store (`data/databa
 extended, shortened, reordered or modified versions), with the space the page-level
 dedup saved. Any node can be downloaded again as a file restored from the store.
 
-**Language:** the pages are in English; the **EN / SV** switch in the header changes the
-Video notes and Remove duplicates pages to Swedish (the choice is remembered in the
-browser). The version-store parts (the store box, the version list and the Versions
-page) are English only so far. All page text is in
+**Language:** the pages are in English; the **EN / SV** switch in the header changes all
+three pages to Swedish (the choice is remembered in the browser). All page text is in
 `src/website/static/i18n.js`, and the server's messages are in `src/website/i18n.py`;
-the page sends its language in the `X-Lang` header.
+the page sends its language in the `X-Lang` header (download links use `?lang=`).
 
 Server options: `--port` (default 8000, or `$PORT`), `--whisper-model`, and the
 defaults `--no-summary`, `--keywords`, `--speakers`.
@@ -276,7 +270,6 @@ src/
   store/              document store: page-level dedup, versions, shared images, search
   website/            Flask server, dedupe_api.py, version_tree_api.py, i18n.py
   website/static/     index.html, dedupe.html, versions.html, i18n.js (EN/SV texts)
-samples/              small test files (videos, audio, PDFs, decks); see samples/README.md
 tests/                pytest tests for all of the above
 data/                 raw/, meeting_notes/, resources/, trash/ (contents git-ignored),
                       slide_index.json, database + objects/ (document store)
@@ -316,7 +309,7 @@ The **Remove duplicates** page adds every PDF and deck it checks. From the comma
 
 ```bash
 cd src
-python -m store.ingest_files ../data/database ../samples/docs/*      # add files
+python -m store.ingest_files ../data/database ../data/raw/*.pdf ../data/raw/*.pptx
 ```
 
 ```text

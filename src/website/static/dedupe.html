@@ -30,7 +30,7 @@
       <a class="is-tab" href="versions.html" data-i18n="versions_title">Versions</a>
     </nav>
     <span class="is-header__spacer"></span>
-    <span class="is-header-chip" id="apiChip">Backend: <span class="is-mono"></span></span>
+    <span class="is-header-chip" id="apiChip"><span data-i18n="backend_label">Backend:</span> <span class="is-mono"></span></span>
     <div class="is-lang" role="group" data-i18n-attr="aria-label:lang_aria">
       <button type="button" data-lang="en" lang="en" aria-pressed="true">EN</button>
       <button type="button" data-lang="sv" lang="sv" aria-pressed="false">SV</button>
@@ -118,10 +118,10 @@
       </div>
 
       <div class="is-field" style="margin-top:6px">
-        <span class="is-field__label">Version store (cache)</span>
+        <span class="is-field__label" data-i18n="store_title">Version store (cache)</span>
         <p class="is-field__hint" id="storeInfo">&nbsp;</p>
         <div class="is-actions">
-          <button class="is-btn is-btn--ghost is-btn--danger is-btn--sm" id="resetBtn" type="button">Clear the version store…</button>
+          <button class="is-btn is-btn--ghost is-btn--danger is-btn--sm" id="resetBtn" type="button" data-i18n="store_reset">Clear the version store…</button>
         </div>
       </div>
     </section>
@@ -130,12 +130,12 @@
     <section class="is-card anim anim-2" id="treeSection" aria-labelledby="treeTitle" hidden>
       <h2 class="is-section-title" id="treeTitle">
         <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 22v-6M5 9l3 3M19 9l-3 3M4 20h16"/></svg></span>
-        Versions
+        <span data-i18n="versions_title">Versions</span>
       </h2>
-      <p class="is-field__hint">New versions of stored files were found. Click one to open the version graph.</p>
+      <p class="is-field__hint" data-i18n="trees_hint">New versions of stored files were found. Click one to open the version graph.</p>
       <div class="is-tree-list" id="treeList"></div>
       <div class="is-actions">
-        <a class="is-btn is-btn--ghost is-btn--sm" href="/versions" id="allVersionsLink">Open version graph</a>
+        <a class="is-btn is-btn--ghost is-btn--sm" href="/versions" id="allVersionsLink" data-i18n="open_graph">Open version graph</a>
       </div>
     </section>
 
