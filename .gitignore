@@ -22,3 +22,6 @@ models/
 
 # Secrets
 .hf_token
+
+# Image object store blobs (content-addressed, regenerable)
+objects/
