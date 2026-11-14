@@ -232,6 +232,7 @@ src/
   transcription/      transcribe.py (faster-whisper), diarize.py (pyannote speaker labels)
   notes/              meeting_notes.py (Markdown), summarize.py (Ollama), pdf_to_markdown.py
   dedupe/             slide_dedupe.py (duplicate slide/document cleanup)
+  store/              document store: page-level dedup, versions, shared images, search
   website/            Flask server, dedupe_api.py, static pages
 tests/                pytest tests for all of the above
 data/                 raw/, meeting_notes/, resources/, trash/ (contents git-ignored),
