@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Version Tree</title>
+  <style>
+    :root {
+      --bg: #06130d;
+      --panel: rgba(10, 30, 20, .72);
+      --glow: #38ffa6;
+      --glow-soft: #1f8f63;
+      --edge: rgba(56, 255, 166, .35);
+      --text: #d7ffe9;
+      --text-soft: rgba(215, 255, 233, .6);
+      --trunk: #2e7d52;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+      background: radial-gradient(1200px 800px at 50% -10%, #0c2a1c 0%, var(--bg) 60%);
+      color: var(--text); min-height: 100vh;
+    }
+    header { padding: 20px 28px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+    h1 { font-size: 20px; margin: 0; letter-spacing: .3px; }
+    h1 .spark { color: var(--glow); text-shadow: 0 0 12px var(--glow); }
+    select, .tab {
+      background: var(--panel); color: var(--text); border: 1px solid var(--edge);
+      border-radius: 10px; padding: 8px 12px; font-size: 13px; cursor: pointer;
+    }
+    .tabs { display: flex; gap: 8px; }
+    .tab.active { box-shadow: 0 0 14px var(--glow-soft); border-color: var(--glow); }
+    main { display: grid; grid-template-columns: 1fr 320px; gap: 18px; padding: 0 28px 28px; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    .canvas-wrap {
+      background: var(--panel); border: 1px solid var(--edge); border-radius: 16px;
+      min-height: 480px; position: relative; overflow: hidden;
+    }
+    svg { width: 100%; height: 100%; display: block; min-height: 480px; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--edge); border-radius: 16px;
+      padding: 18px; height: fit-content;
+    }
+    .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
+                color: var(--text-soft); margin: 0 0 12px; }
+    .stat { font-size: 13px; margin: 6px 0; display: flex; justify-content: space-between; }
+    .stat b { color: var(--glow); }
+    .saved-big { font-size: 34px; font-weight: 700; color: var(--glow);
+                 text-shadow: 0 0 20px var(--glow-soft); margin: 6px 0 2px; }
+    .tooltip {
+      position: absolute; pointer-events: none; background: rgba(6, 25, 16, .96);
+      border: 1px solid var(--glow); border-radius: 10px; padding: 10px 12px;
+      font-size: 12px; color: var(--text); box-shadow: 0 0 18px var(--glow-soft);
+      opacity: 0; transition: opacity .12s; max-width: 260px; z-index: 5;
+    }
+    .tooltip .t-name { font-weight: 600; color: var(--glow); margin-bottom: 4px; }
+    .tooltip .t-row { color: var(--text-soft); }
+    .dl-btn {
+      margin-top: 10px; width: 100%; background: linear-gradient(180deg, var(--glow), var(--glow-soft));
+      color: #06130d; border: none; border-radius: 10px; padding: 10px; font-weight: 600;
+      cursor: pointer; font-size: 13px;
+    }
+    .dl-btn:disabled { opacity: .4; cursor: default; }
+    .hint { color: var(--text-soft); font-size: 12px; margin-top: 14px; line-height: 1.5; }
+    .empty { color: var(--text-soft); padding: 40px; text-align: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><span class="spark">&#10022;</span> Version Tree</h1>
+    <select id="doc-select" title="pick a document"></select>
+    <div class="tabs">
+      <div class="tab active" data-type="pdf">PDF</div>
+      <div class="tab" data-type="pptx">PPTX</div>
+    </div>
+  </header>
+  <main>
+    <div class="canvas-wrap">
+      <svg id="tree" viewBox="0 0 800 520" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="tooltip" id="tooltip"></div>
+    </div>
+    <aside class="panel">
+      <h2>Space saved</h2>
+      <div class="saved-big" id="saved-pct">&ndash;</div>
+      <div class="stat"><span>Saved</span><b id="saved-bytes">&ndash;</b></div>
+      <div class="stat"><span>If stored in full</span><span id="full-bytes">&ndash;</span></div>
+      <div class="stat"><span>Actually stored</span><span id="stored-bytes">&ndash;</span></div>
+      <div class="stat"><span>Pages (full &rarr; stored)</span><span id="pages-detail">&ndash;</span></div>
+      <div class="stat"><span>Images (full &rarr; stored)</span><span id="images-detail">&ndash;</span></div>
+      <h2 style="margin-top:20px">Selected node</h2>
+      <div id="node-info" class="hint">Hover or click a node.</div>
+      <button class="dl-btn" id="download" disabled>Download this version</button>
+      <div class="hint">Nodes grow from a <b>sprout</b> (one version) into a fuller tree as
+        versions accumulate. Older versions sit lower and thicker (the trunk); the newest
+        twigs are on top. The <span style="color:var(--glow)">glowing</span> node is the one
+        you just added. Downloads are regenerated from stored content.</div>
+    </aside>
+  </main>
+  <script src="tree.js"></script>
+</body>
+</html>

@@ -25,3 +25,6 @@ models/
 
 # Image object store blobs (content-addressed, regenerable)
 objects/
+
+# Corpus image object store blobs (content-addressed, regenerable)
+data/objects/

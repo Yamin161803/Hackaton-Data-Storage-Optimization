@@ -53,6 +53,7 @@ from notes.meeting_notes import (embed_local_images, has_summary,  # noqa: E402
                                  read_front_matter, read_keywords, read_speaker_count)
 from videohash import Fingerprint, fingerprint  # noqa: E402
 from website.dedupe_api import bp as dedupe_bp  # noqa: E402  (sidan Rensa dubbletter)
+from website.version_tree_api import bp as version_tree_bp  # noqa: E402  (versionsträd)
 
 VIDEO_ENDELSER = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 
@@ -74,6 +75,7 @@ _PIPELINE_LAS = threading.Lock()
 app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_MB * 1024 * 1024
 app.register_blueprint(dedupe_bp)
+app.register_blueprint(version_tree_bp)
 
 
 # ------------------------------------------------------------------
@@ -276,9 +278,15 @@ def dedupe_sida():
     return send_from_directory(STATIC_DIR, "dedupe.html")
 
 
+@app.route("/tree")
+def tree_sida():
+    return send_from_directory(STATIC_DIR, "tree.html")
+
+
 @app.route("/<path:namn>")
 def statiska_filer(namn):
-    if namn in ("index.html", "style.css", "function.js", "dedupe.html", "dedupe.js"):
+    if namn in ("index.html", "style.css", "function.js", "dedupe.html", "dedupe.js",
+                "tree.html", "tree.js"):
         return send_from_directory(STATIC_DIR, namn)
     return jsonify(detail="Hittades inte."), 404
 
