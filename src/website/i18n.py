@@ -36,6 +36,9 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bad_mode": "The mode must be 'batch' or 'online'.",
         "busy": "A cleanup is already running. Wait until it is done.",
         "home": "Home",
+        # versions page (version_tree_api.py)
+        "bad_doc_id": "Invalid document id.",
+        "no_doc": "No document with id {doc_id}.",
     },
     "sv": {
         "no_file": "Ingen fil skickades i fältet '{field}'.",
@@ -62,6 +65,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "bad_mode": "Läget ska vara 'batch' eller 'online'.",
         "busy": "En rensning pågår redan. Vänta tills den är klar.",
         "home": "Hem",
+        "bad_doc_id": "Ogiltigt dokument-id.",
+        "no_doc": "Inget dokument med id {doc_id}.",
     },
 }
 
@@ -69,7 +74,8 @@ MESSAGES: dict[str, dict[str, str]] = {
 def lang() -> str:
     """The language of the current request: "sv" when the page asks for it, else "en"."""
     if has_request_context():
-        asked = request.headers.get("X-Lang", "").strip().lower()[:2]
+        # X-Lang from the page's fetch calls; ?lang= for plain links such as downloads
+        asked = (request.headers.get("X-Lang") or request.args.get("lang", "")).strip().lower()[:2]
         if asked in MESSAGES:
             return asked
     return DEFAULT_LANG

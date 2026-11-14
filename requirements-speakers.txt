@@ -1,0 +1,9 @@
+# Optional: "who is speaking" labels (--speakers):  python run.py setup --speakers
+# Also needs a Hugging Face token in .hf_token (or HF_TOKEN), after accepting the terms of
+# pyannote/speaker-diarization-community-1 on huggingface.co. See HOW_TO_RUN.md.
+#
+# This installs the CPU build of PyTorch. For an NVIDIA GPU, install the CUDA build instead:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu126
+pyannote.audio>=4.0          # the community-1 model needs 4.x
+torch>=2.1
+soundfile>=0.12

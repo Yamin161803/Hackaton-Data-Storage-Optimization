@@ -23,7 +23,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-DEFAULT_DB = Path(__file__).resolve().parents[2] / "database"
+DEFAULT_DB = Path(__file__).resolve().parents[2] / "data" / "database"  # the website's store
 
 SOURCE_NAMES = {1: "pdf", 2: "pptx"}
 SOURCE_CODES = {v: k for k, v in SOURCE_NAMES.items()}

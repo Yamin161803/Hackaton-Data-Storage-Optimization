@@ -449,7 +449,7 @@ def test_lang_header_allowed_by_cors(site):
 
 def test_page_files_are_served_with_i18n(site):
     client, _, _ = site
-    for page in ("/", "/dedupe"):
+    for page in ("/", "/dedupe", "/versions"):
         html = client.get(page).get_data(as_text=True)
         assert '<html lang="en">' in html and 'src="i18n.js"' in html
         assert 'data-lang="sv"' in html
@@ -465,6 +465,34 @@ def test_i18n_has_the_same_keys_in_both_languages():
     sv = js.split("\n  sv: {", 1)[1].split("\n};", 1)[0]
     keys = lambda block: set(re.findall(r"(?m)(?:^\s+|,\s*)(\w+):\s", block))  # noqa: E731
     assert keys(en) == keys(sv) and len(keys(en)) > 100
+
+
+def test_every_key_the_pages_use_has_both_languages():
+    import re
+    static = Path(__file__).resolve().parents[1] / "src/website/static"
+    js = (static / "i18n.js").read_text(encoding="utf-8")
+    en = js.split("  en: {", 1)[1].split("\n  sv: {", 1)[0]
+    sv = js.split("\n  sv: {", 1)[1].split("\n};", 1)[0]
+    defined = lambda block: set(re.findall(r"(?m)^\s+(\w+):\s", block))  # noqa: E731
+    used = set()
+    for page in ("index.html", "dedupe.html", "versions.html"):
+        html = (static / page).read_text(encoding="utf-8")
+        used |= set(re.findall(r'data-i18n="(\w+)"', html))
+        used |= {k for attrs in re.findall(r'data-i18n-attr="([^"]+)"', html)
+                 for k in re.findall(r":\s*(\w+)", attrs)}
+    for script in ("function.js", "dedupe.js", "versions.js"):
+        used |= set(re.findall(r'(?<![\w.])t\("(\w+)"\s*[,)]', (static / script).read_text(encoding="utf-8")))
+    assert used - defined(en) == set() and used - defined(sv) == set()
+
+
+def test_version_api_messages_follow_the_language(site):
+    client, _, _ = site
+    assert client.get("/api/tree/abc").get_json()["detail"] == "Invalid document id."
+    sv = client.get("/api/tree/abc", headers={"X-Lang": "sv"}).get_json()["detail"]
+    assert sv == "Ogiltigt dokument-id."
+    # download links can't send a header, so they pass ?lang=
+    resp = client.get("/api/tree/abc/download?lang=sv")
+    assert resp.status_code == 400 and resp.get_json()["detail"] == "Ogiltigt dokument-id."
 
 
 def test_server_messages_have_the_same_keys_in_both_languages():

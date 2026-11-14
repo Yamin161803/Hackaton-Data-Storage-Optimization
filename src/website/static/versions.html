@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Version graph</title>
+<title data-i18n="vg_title">Version graph</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -14,24 +14,28 @@
 
 <header class="is-header">
   <div class="is-header__inner">
-    <a class="is-home" href="index.html" aria-label="Video notes, home page">
+    <a class="is-home" href="index.html" data-i18n-attr="aria-label:home_aria">
       <svg class="is-logo" viewBox="0 0 44 44" aria-hidden="true">
         <rect x="6" y="6" width="32" height="32" rx="9" fill="none" stroke="#000" stroke-width="3"/>
         <path d="M14 18h16M17 22h10M20 26h4" stroke="#000" stroke-width="3" stroke-linecap="round"/>
       </svg>
       <span class="is-divider" aria-hidden="true"></span>
       <span>
-        <span class="is-header__title">Version graph</span><br>
-        <span class="is-header__sub">Browse version families</span>
+        <span class="is-header__title" data-i18n="vg_title">Version graph</span><br>
+        <span class="is-header__sub" data-i18n="vg_sub">Browse version families</span>
       </span>
     </a>
-    <nav class="is-tabs" aria-label="Pages">
-      <a class="is-tab" href="index.html">Video notes</a>
-      <a class="is-tab" href="dedupe.html">Remove duplicates</a>
-      <a class="is-tab" href="versions.html" aria-current="page">Versions</a>
+    <nav class="is-tabs" data-i18n-attr="aria-label:pages_aria">
+      <a class="is-tab" href="index.html" data-i18n="app_title">Video notes</a>
+      <a class="is-tab" href="dedupe.html" data-i18n="dedupe_title">Remove duplicates</a>
+      <a class="is-tab" href="versions.html" aria-current="page" data-i18n="versions_title">Versions</a>
     </nav>
     <span class="is-header__spacer"></span>
-    <button class="is-theme-btn" id="themeBtn" type="button" aria-label="Toggle dark mode">
+    <div class="is-lang" role="group" data-i18n-attr="aria-label:lang_aria">
+      <button type="button" data-lang="en" lang="en" aria-pressed="true">EN</button>
+      <button type="button" data-lang="sv" lang="sv" aria-pressed="false">SV</button>
+    </div>
+    <button class="is-theme-btn" id="themeBtn" type="button" data-i18n-attr="aria-label:theme_aria">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
     </button>
   </div>
@@ -43,9 +47,9 @@
     <section class="is-card anim anim-2" aria-labelledby="famTitle">
       <h2 class="is-section-title" id="famTitle">
         <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></span>
-        Families
+        <span data-i18n="families">Families</span>
       </h2>
-      <div class="is-fam-list" id="famList" role="table" aria-label="Version families"></div>
+      <div class="is-fam-list" id="famList" role="table" data-i18n-attr="aria-label:families_aria"></div>
     </section>
 
     <!-- Right: the zoomable graph -->
@@ -56,15 +60,15 @@
           <span id="graphName">Version graph</span>
         </h2>
         <div class="is-graph-controls">
-          <div class="is-seg" role="group" aria-label="Direction">
-            <button type="button" id="orientTB" aria-pressed="true">Vertical</button>
-            <button type="button" id="orientLR" aria-pressed="false">Horizontal</button>
+          <div class="is-seg" role="group" data-i18n-attr="aria-label:direction_aria">
+            <button type="button" id="orientTB" aria-pressed="true" data-i18n="vertical">Vertical</button>
+            <button type="button" id="orientLR" aria-pressed="false" data-i18n="horizontal">Horizontal</button>
           </div>
-          <button class="is-btn is-btn--ghost is-btn--sm" id="treeReset" type="button" title="Reset view">Reset</button>
-          <button class="is-btn is-btn--ghost is-btn--sm" id="treeFull" type="button" title="Fullscreen (Esc to exit)">Fullscreen</button>
+          <button class="is-btn is-btn--ghost is-btn--sm" id="treeReset" type="button" data-i18n="reset_view" data-i18n-attr="title:reset_view_title">Reset</button>
+          <button class="is-btn is-btn--ghost is-btn--sm" id="treeFull" type="button" data-i18n="fullscreen" data-i18n-attr="title:fullscreen_title">Fullscreen</button>
         </div>
       </div>
-      <p class="is-field__hint">Drag to pan, scroll to zoom. Click a version for details and download.</p>
+      <p class="is-field__hint" data-i18n="vg_hint">Drag to pan, scroll to zoom. Click a version for details and download.</p>
       <div class="is-graph-surface">
         <div id="treeChart" class="is-graph-chart"></div>
         <div class="is-tree-savings" id="treeSavings"></div>
@@ -74,6 +78,7 @@
   </div>
 </main>
 
+<script src="i18n.js"></script>
 <script src="versions.js"></script>
 </body>
 </html>

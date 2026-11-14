@@ -72,11 +72,13 @@ const getTrash = () => api(`/trash?path=${encodeURIComponent(trashInput.value.tr
 // Store (versionslager) endpoints live under /api/store, not /api/dedupe.
 const STORE_API = API.replace(/\/api\/dedupe$/, "/api/store");
 async function storeApi(path, body) {
-  const opts = body === undefined ? {} :
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const headers = { "X-Lang": LANG };
+  const opts = body === undefined ? { headers } :
+    { method: "POST", headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(body) };
   const resp = await fetch(`${STORE_API}${path}`, opts);
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw Object.assign(new Error(data.detail || `Fel ${resp.status}`), { status: resp.status });
+  if (!resp.ok) throw Object.assign(new Error(data.detail || t("server_status", { status: resp.status })), { status: resp.status });
   return data;
 }
 
@@ -388,18 +390,18 @@ async function renderVersionTrees(trees) {
 
   // Fetch each family once to show version count + savings in the row.
   const rows = [];
-  for (const t of trees) {
+  for (const tree of trees) {
     let fam = null;
     try {
-      const resp = await fetch(`/api/tree/${t.doc_id}`);
+      const resp = await fetch(`/api/tree/${tree.doc_id}`);
       if (resp.ok) fam = await resp.json();
     } catch (e) { /* skip */ }
     const saved = fam && fam.savings ? fam.savings.saved_bytes : 0;
-    const size = fam ? fam.nodes.length : t.family_size;
-    rows.push(`<a class="is-tree-rowlink" href="/versions?doc=${encodeURIComponent(t.doc_id)}">
-        <span class="is-chip">${t.source_type.toUpperCase()}</span>
-        <span class="is-tree-rowlink__name">${escapeHtml(t.name)}</span>
-        <span class="is-tree-rowlink__meta">${size} versions</span>
+    const size = fam ? fam.nodes.length : tree.family_size;
+    rows.push(`<a class="is-tree-rowlink" href="/versions?doc=${encodeURIComponent(tree.doc_id)}">
+        <span class="is-chip">${tree.source_type.toUpperCase()}</span>
+        <span class="is-tree-rowlink__name">${escapeHtml(tree.name)}</span>
+        <span class="is-tree-rowlink__meta">${t("n_versions", { n: size })}</span>
         <span class="is-tree-rowlink__saved">\u2212${fmtBytes(saved)}</span>
         <span class="is-tree-rowlink__arrow" aria-hidden="true">\u2192</span>
       </a>`);
@@ -419,6 +421,7 @@ document.addEventListener("langchange", () => {
   refreshTrash();
   if (pickerFor) setPickerTitle();
   if (lastReport) renderReport(...lastReport);
+  refreshStore();
 });
 
 /* ---------- Start ---------- */
@@ -427,22 +430,22 @@ async function refreshStore() {
   if (!info) return;
   try {
     const s = await storeApi("/status");
-    info.textContent = `${fmtNum(s.documents)} documents · ${fmtNum(s.pages)} pages · ${fmtNum(s.images)} images stored.`;
-  } catch (e) { info.textContent = "Could not read the version store."; }
+    info.textContent = t("store_info", { docs: fmtNum(s.documents), pages: fmtNum(s.pages), images: fmtNum(s.images) });
+  } catch (e) { info.textContent = t("store_unreadable"); }
 }
 
 document.getElementById("resetBtn").addEventListener("click", async () => {
   const ok = await askConfirm({
-    title: "Clear the version store?",
-    text: "This permanently deletes all stored documents, pages and images in the version store (cache). Your real files are not affected.",
-    ok: "Clear everything",
+    title: t("store_reset_title"),
+    text: t("store_reset_text"),
+    ok: t("store_reset_ok"),
   });
   if (!ok) return;
   try {
     await storeApi("/reset", {});
     await refreshStore();
   } catch (e) {
-    resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>Could not clear</strong>${escapeHtml(e.message)}</div>`;
+    resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>${t("store_reset_failed")}</strong>${escapeHtml(e.message)}</div>`;
   }
 });
 
