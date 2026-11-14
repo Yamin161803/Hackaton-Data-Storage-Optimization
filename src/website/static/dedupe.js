@@ -341,11 +341,19 @@ function renderReport(r, roundTrip) {
       <span class="is-filerow__why">${escapeHtml(short(f.reason))}</span></div>`).join("");
 
   const savedLabel = t(w.deleted ? "saved_deleted" : "saved_if");
+  // Total savings = whole-file removal (file-level) + content dedup/compression
+  // (shared pages/images stored once). The content part is why a folder can
+  // dedup PDF/PPTX content yet remove 0 whole files — show BOTH.
+  const contentSaved = (r.content && r.content.saved_bytes) || 0;
+  const totalSaved = removed + contentSaved;
+  const totalBefore = total + contentSaved;   // full footprint before any dedup
+  const rt = document.getElementById("resultTime");
+  if (rt) rt.textContent = `${t("run_time")}: ${fmtSecs(w.total_seconds)}`;
   resultBody.innerHTML = `
     <div class="is-stats">
-      <div><div class="is-stat__num">${fmtSecs(w.total_seconds)}</div><div class="is-stat__label">${t("run_time")}</div></div>
-      <div><div class="is-stat__num is-good">${fmtBytes(removed)}</div><div class="is-stat__label">${savedLabel}</div></div>
-      <div><div class="is-stat__num">${fmtLocal(pct, 1)} %</div><div class="is-stat__label">${t("of_total", { size: fmtBytes(total) })}</div></div>
+      <div><div class="is-stat__num">${fmtBytes(totalBefore)}</div><div class="is-stat__label">${t("total_before")}</div></div>
+      <div><div class="is-stat__num is-good">${fmtBytes(totalSaved)}</div><div class="is-stat__label">${t("total_saved")}</div></div>
+      <div><div class="is-stat__num">${fmtBytes(contentSaved)}</div><div class="is-stat__label">${t("content_saved")}</div></div>
     </div>
     <div class="is-dist-bar" role="img" aria-label="${t("dist_aria", { kept: fmtBytes(kept), removed: fmtBytes(removed) })}">
       <div style="width:${total ? 100 * kept / total : 0}%;background:var(--primary)"></div>
@@ -365,7 +373,7 @@ function renderReport(r, roundTrip) {
     ${dedupPairHtml(r)}
 
     <h3 class="is-subhead">${t("performance")}</h3>
-    <dl class="is-kv">
+    <dl class="is-kv is-kv--perf">
       <dt>${t("k_total_server")}</dt><dd>${fmtSecs(w.total_seconds)}</dd>
       <dt>${t("k_analysis")}</dt><dd>${fmtSecs(tm.total_seconds)}</dd>
       ${w.deleted ? `<dt>${t("k_deletion")}</dt><dd>${fmtSecs(w.deleted.seconds)}</dd>` : ""}
@@ -379,6 +387,28 @@ function renderReport(r, roundTrip) {
     ${(r.hints || []).map(h => `<p class="is-field__hint" style="margin-top:12px">${t("tip", { hint: escapeHtml(h) })}</p>`).join("")}
   `;
   renderVersionTrees(r.version_trees || []);
+  renderSingleSavers();
+}
+
+/* ---------- Single-doc picture savers: table on the dedupe page (no download) ---------- */
+async function renderSingleSavers() {
+  const section = document.getElementById("saversSection");
+  const list = document.getElementById("saversList");
+  if (!section || !list) return;
+  let savers = [];
+  try {
+    const resp = await fetch("/api/tree/single-savers");
+    if (resp.ok) savers = (await resp.json()).savers || [];
+  } catch (e) { /* ignore */ }
+  if (!savers.length) { section.hidden = true; return; }
+  list.innerHTML = savers.map(s => `
+    <div class="is-tree-rowlink" style="cursor:default">
+      <span class="is-chip">${(s.source_type || "").toUpperCase()}</span>
+      <span class="is-tree-rowlink__name">${escapeHtml(s.name)}</span>
+      <span class="is-tree-rowlink__meta">pictures −${fmtBytes(s.images_saved)}</span>
+      <span class="is-tree-rowlink__saved">−${fmtBytes(s.saved_bytes)}</span>
+    </div>`).join("");
+  section.hidden = false;
 }
 
 /* ---------- Version trees: a compact LIST; click opens the /versions graph page ---------- */

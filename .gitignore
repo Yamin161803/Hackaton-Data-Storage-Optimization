@@ -31,3 +31,6 @@ data/objects/
 # runtime store + dedupe index (regenerated)
 data/database
 data/slide_index.json
+
+# Hackathon brief material (large: PDFs/PPTX/DOCX/videos) — never commit
+data/Brief/

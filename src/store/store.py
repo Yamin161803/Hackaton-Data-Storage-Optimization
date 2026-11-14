@@ -393,7 +393,8 @@ class Store:
     def _record_edges(self, child_id: int, child_pages: set[str], candidates: list[int]) -> None:
         for parent_id in candidates:
             parent_pages = set(self.document_page_hashes(parent_id))
-            if not (parent_pages & child_pages):
+            shared = len(parent_pages & child_pages)
+            if not shared:
                 continue
             added = len(child_pages - parent_pages)
             removed = len(parent_pages - child_pages)
@@ -407,8 +408,8 @@ class Store:
                 relation = REL_MODIFIED
             self.conn.execute(
                 "INSERT OR REPLACE INTO document_edge "
-                "(parent_id, child_id, relation, added, removed) VALUES (?,?,?,?,?)",
-                (parent_id, child_id, relation, added, removed),
+                "(parent_id, child_id, relation, added, removed, shared) VALUES (?,?,?,?,?,?)",
+                (parent_id, child_id, relation, added, removed, shared),
             )
 
     # -- shared image object store --
