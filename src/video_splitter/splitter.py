@@ -246,6 +246,18 @@ def _scan_frames(video: Path, ffmpeg: str, threshold: float, camera_threshold: f
     return _Scan(normal.picked, camera.picked, motion)
 
 
+def _sum_expr(terms: list[str]) -> str:
+    """Join terms with "+" as a balanced, parenthesised tree.
+
+    ffmpeg's expression parser rejects a flat chain of more than ~100 "+" terms
+    ("Cannot allocate memory"); a balanced tree keeps the nesting at log2(n).
+    """
+    if len(terms) == 1:
+        return terms[0]
+    mid = len(terms) // 2
+    return f"({_sum_expr(terms[:mid])}+{_sum_expr(terms[mid:])})"
+
+
 def split_video(
     video: str | Path,
     output_dir: str | Path,
@@ -300,7 +312,7 @@ def split_video(
 
     # Pass 2: write only the picked frames. The select expression can get long, so it is
     # read from a file ("-/vf <file>") instead of the command line.
-    select = "select=" + "+".join(f"eq(n\\,{n})" for n, *_ in picked)
+    select = "select=" + _sum_expr([f"eq(n\\,{n})" for n, *_ in picked])
     with tempfile.TemporaryDirectory() as tmp:
         filter_file = Path(tmp) / "select.txt"
         filter_file.write_text(select, encoding="utf-8")

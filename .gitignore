@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *_split/
+# Videos are too big for GitHub (100 MB file limit)
+data/*
+dump/*
+.venv/*
 # Videos are too big for GitHub (100 MB file limit).
 # Keep the data folders in git (via an empty .gitkeep) but not the files in them.
 data/meeting_notes/*
