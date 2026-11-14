@@ -1,4 +1,10 @@
 imageio-ffmpeg>=0.4
 numpy>=1.24
-pytest>=8
 flask>=2.2
+# duplicate cleanup (src/dedupe) and PDF -> Markdown (src/notes)
+pypdf>=4
+python-pptx>=1.0
+pillow>=10
+# tests
+pytest>=8
+reportlab>=4
