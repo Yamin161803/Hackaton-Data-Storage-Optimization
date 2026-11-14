@@ -162,7 +162,7 @@ class DocumentInput:
 
 @dataclass
 class IngestResult:
-    status: str                 # "stored" | "duplicate"
+    status: str                 # "stored" | "duplicate" (byte) | "content_duplicate"
     document_id: int | None
     new_pages: int = 0          # pages whose content was not already stored
     shared_pages: int = 0       # pages already present (dedup hits)
@@ -192,6 +192,44 @@ class Store:
 
     def close(self) -> None:
         self.conn.close()
+
+    def reset(self) -> dict:
+        """Wipe the corpus store: all documents/pages/images and the object blobs.
+
+        DESTRUCTIVE. Clears the corpus tables and deletes the content-addressed
+        image blobs under objects_dir. Returns counts of what was removed.
+        The schema is recreated so the store is immediately usable again.
+        """
+        counts = {}
+        for tbl in ("document", "page", "document_page", "document_edge",
+                    "page_image", "image", "image_hash"):
+            try:
+                counts[tbl] = self.conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+            except Exception:
+                counts[tbl] = 0
+        # Drop corpus tables (leave any non-corpus tables in the shared DB alone).
+        for tbl in ("document_edge", "document_page", "page_image", "page_fts",
+                    "page", "image_hash", "image", "document"):
+            self.conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+        self.conn.commit()
+
+        blobs_removed = 0
+        if self.objects_dir.exists():
+            for p in self.objects_dir.rglob("*"):
+                if p.is_file():
+                    p.unlink()
+                    blobs_removed += 1
+            # remove now-empty shard dirs
+            for p in sorted(self.objects_dir.rglob("*"), reverse=True):
+                if p.is_dir():
+                    try:
+                        p.rmdir()
+                    except OSError:
+                        pass
+        counts["blobs"] = blobs_removed
+
+        self._ensure_schema()   # recreate empty tables
+        return counts
 
     # -- queries --
 
@@ -255,12 +293,29 @@ class Store:
 
     # -- ingest --
 
-    def ingest(self, doc: DocumentInput, record_edges: bool = True) -> IngestResult:
-        """Ingest a document. Exact duplicates are discarded.
+    def _content_hash(self, page_hashes: list[str]) -> str:
+        """Regeneration-stable document identity: hash of the ordered page hashes.
 
-        Returns an IngestResult describing what happened (stored vs duplicate,
-        how many pages were new vs shared, and which existing documents share
-        pages — the candidates for a version relationship).
+        Unlike the full-file byte hash, this is identical for a file and any
+        content-faithful regeneration of it (same pages, same order), so a
+        downloaded-then-reuploaded node is recognized as the same content.
+        """
+        return _sha(*page_hashes)
+
+    def find_document_by_content_hash(self, content_hash: str) -> int | None:
+        row = self.conn.execute(
+            "SELECT id FROM document WHERE content_hash = ?", (content_hash,)
+        ).fetchone()
+        return row["id"] if row else None
+
+    def ingest(self, doc: DocumentInput, record_edges: bool = True) -> IngestResult:
+        """Ingest a document. Byte-identical and content-identical files are discarded.
+
+        Two dedup gates:
+          1. full_hash    -- exact byte duplicate (fast, certain).
+          2. content_hash -- same ordered pages, possibly different bytes
+                             (recognizes a regenerated-then-reuploaded file).
+        Returns an IngestResult (stored / duplicate / content_duplicate).
         """
         # 1. Exact-duplicate gate (full-file hash). Cheapest/most certain.
         existing = self.find_document_by_full_hash(doc.full_hash)
@@ -269,18 +324,25 @@ class Store:
 
         page_hashes = [p.hash for p in doc.pages]
 
-        # 2. Find version candidates BEFORE inserting (docs sharing any page).
+        # 2. Content-duplicate gate: same pages in the same order, different bytes.
+        content_hash = self._content_hash(page_hashes)
+        content_existing = self.find_document_by_content_hash(content_hash)
+        if content_existing is not None:
+            return IngestResult(status="content_duplicate", document_id=content_existing)
+
+        # 3. Find version candidates BEFORE inserting (docs sharing any page).
         shared_counts = self.documents_sharing_pages(page_hashes)
         candidates = sorted(shared_counts, key=lambda d: -shared_counts[d])
 
-        # 3. Insert document row.
+        # 4. Insert document row.
         doc_id = _id_from_hash(doc.full_hash)
         now = datetime.now(timezone.utc).isoformat()
         self.conn.execute(
-            "INSERT INTO document (id, full_hash, quick_hash, file_size, source_type, "
-            "source_name, title, page_count, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (doc_id, doc.full_hash, doc.quick_hash, doc.file_size, doc.source_type,
-             doc.source_name, doc.title, len(doc.pages), now),
+            "INSERT INTO document (id, full_hash, content_hash, quick_hash, file_size, "
+            "source_type, source_name, title, page_count, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (doc_id, doc.full_hash, content_hash, doc.quick_hash, doc.file_size,
+             doc.source_type, doc.source_name, doc.title, len(doc.pages), now),
         )
 
         # 4. Dedup + store pages, write the ordered manifest.
@@ -435,3 +497,52 @@ class Store:
             out.append({"position": r["position"], "page_hash": r["hash"],
                         "text": r["text"], "images": paths})
         return out
+
+    # -- pixel-identical skeleton store/restore --
+
+    def image_store(self):
+        """A shared ImageStore rooted at this store's objects dir (skeleton images)."""
+        from .image_store import ImageStore
+        return ImageStore(self.objects_dir / "skeleton_images")
+
+    def save_skeleton(self, document_id: int, kind: str, skeleton_json: str,
+                      skeleton_blob: bytes | None = None) -> None:
+        """Persist the restore skeleton for a document (pdf/pptx)."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO document_skeleton "
+            "(document_id, kind, skeleton_json, skeleton_blob) VALUES (?,?,?,?)",
+            (document_id, kind, skeleton_json, skeleton_blob),
+        )
+        self.conn.commit()
+
+    def get_skeleton(self, document_id: int) -> dict | None:
+        """Return {kind, skeleton_json, skeleton_blob} or None if no skeleton stored."""
+        row = self.conn.execute(
+            "SELECT kind, skeleton_json, skeleton_blob FROM document_skeleton "
+            "WHERE document_id = ?", (document_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        blob = row["skeleton_blob"]
+        return {"kind": row["kind"], "skeleton_json": row["skeleton_json"],
+                "skeleton_blob": bytes(blob) if blob is not None else None}
+
+    def restore_original(self, document_id: int) -> tuple[bytes, str] | None:
+        """Rebuild the EXACT original file from its skeleton. Returns (bytes, ext).
+
+        Pixel-identical for PDF, byte-identical for PPTX. None if no skeleton.
+        """
+        import json
+        skel = self.get_skeleton(document_id)
+        if skel is None:
+            return None
+        images = self.image_store()
+        if skel["kind"] == "pdf":
+            from .pdf_skeleton import restore_pdf
+            data = restore_pdf(skel["skeleton_blob"], json.loads(skel["skeleton_json"]), images)
+            return data, "pdf"
+        if skel["kind"] == "pptx":
+            from .pptx_skeleton import restore_pptx
+            data = restore_pptx(json.loads(skel["skeleton_json"]), images)
+            return data, "pptx"
+        return None

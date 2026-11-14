@@ -69,6 +69,17 @@ async function api(path, body) {
 }
 const getTrash = () => api(`/trash?path=${encodeURIComponent(trashInput.value.trim())}`);
 
+// Store (versionslager) endpoints live under /api/store, not /api/dedupe.
+const STORE_API = API.replace(/\/api\/dedupe$/, "/api/store");
+async function storeApi(path, body) {
+  const opts = body === undefined ? {} :
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const resp = await fetch(`${STORE_API}${path}`, opts);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw Object.assign(new Error(data.detail || `Fel ${resp.status}`), { status: resp.status });
+  return data;
+}
+
 function setStep(n) {
   document.querySelectorAll(".is-step").forEach(el => el.classList.toggle("is-active", +el.dataset.step === n));
 }
@@ -269,6 +280,27 @@ runBtn.addEventListener("click", async () => {
 /* ---------- Report ---------- */
 const stageLabel = (k) => { const s = t("stage_" + k); return s === "stage_" + k ? k : s; };
 
+/* Compact side-by-side dedup stats: Slides | Images, each total -> unique (removed). */
+function dedupPairHtml(r) {
+  const sl = r.slides_count || { total: 0, unique: 0, removed: 0 };
+  const im = r.images || { total: 0, unique: 0, removed: 0 };
+  const removedSl = sl.removed ?? Math.max(0, (sl.total || 0) - (sl.unique || 0));
+  const removedIm = im.removed ?? Math.max(0, (im.total || 0) - (im.unique || 0));
+  const cell = (label, d, removed) => `
+    <div class="is-dedup">
+      <div class="is-dedup__title">${label}</div>
+      <div class="is-dedup__nums">
+        <span class="is-dedup__kept">${fmtNum(d.unique)}</span>
+        <span class="is-dedup__of">/ ${fmtNum(d.total)}</span>
+      </div>
+      <div class="is-dedup__removed">${fmtNum(removed)} ${t("removed_label")}</div>
+    </div>`;
+  return `<div class="is-dedup-pair">
+      ${cell(t("slides_label"), sl, removedSl)}
+      ${cell(t("images_label"), im, removedIm)}
+    </div>`;
+}
+
 function renderReport(r, roundTrip) {
   const sp = r.space, fl = r.files, tm = r.time, w = r.web;
   const removed = sp.removed_this_run_bytes, kept = sp.kept_bytes, total = removed + kept;
@@ -326,9 +358,9 @@ function renderReport(r, roundTrip) {
       <dt>${t("k_found")}</dt><dd>${fmtNum(fl.found)}</dd>
       <dt>${t("k_identical")}</dt><dd>${fmtNum(fl.duplicates_by_content)}</dd>
       <dt>${t("k_parsed")}</dt><dd>${fmtNum(fl.parsed)}</dd>
-      <dt>${t("k_unique")}</dt><dd>${fmtNum(r.slides.unique)}</dd>
       ${fl.errors ? `<dt>${t("k_unreadable")}</dt><dd>${fmtNum(fl.errors)}</dd>` : ""}
     </dl>
+    ${dedupPairHtml(r)}
 
     <h3 class="is-subhead">${t("performance")}</h3>
     <dl class="is-kv">
@@ -344,6 +376,36 @@ function renderReport(r, roundTrip) {
     ${removedRows ? `<h3 class="is-subhead">${t("rejected_files", { n: fmtNum(r.removed.length) })}</h3><div class="is-filelist">${removedRows}</div>` : ""}
     ${(r.hints || []).map(h => `<p class="is-field__hint" style="margin-top:12px">${t("tip", { hint: escapeHtml(h) })}</p>`).join("")}
   `;
+  renderVersionTrees(r.version_trees || []);
+}
+
+/* ---------- Version trees: a compact LIST; click opens the /versions graph page ---------- */
+async function renderVersionTrees(trees) {
+  const section = document.getElementById("treeSection");
+  const list = document.getElementById("treeList");
+  if (!section || !list) return;
+  if (!trees.length) { section.hidden = true; return; }
+
+  // Fetch each family once to show version count + savings in the row.
+  const rows = [];
+  for (const t of trees) {
+    let fam = null;
+    try {
+      const resp = await fetch(`/api/tree/${t.doc_id}`);
+      if (resp.ok) fam = await resp.json();
+    } catch (e) { /* skip */ }
+    const saved = fam && fam.savings ? fam.savings.saved_bytes : 0;
+    const size = fam ? fam.nodes.length : t.family_size;
+    rows.push(`<a class="is-tree-rowlink" href="/versions?doc=${encodeURIComponent(t.doc_id)}">
+        <span class="is-chip">${t.source_type.toUpperCase()}</span>
+        <span class="is-tree-rowlink__name">${escapeHtml(t.name)}</span>
+        <span class="is-tree-rowlink__meta">${size} versions</span>
+        <span class="is-tree-rowlink__saved">\u2212${fmtBytes(saved)}</span>
+        <span class="is-tree-rowlink__arrow" aria-hidden="true">\u2192</span>
+      </a>`);
+  }
+  list.innerHTML = rows.join("");
+  section.hidden = false;
 }
 
 /* ---------- Language switch: redo everything built in JS ---------- */
@@ -360,6 +422,30 @@ document.addEventListener("langchange", () => {
 });
 
 /* ---------- Start ---------- */
+async function refreshStore() {
+  const info = document.getElementById("storeInfo");
+  if (!info) return;
+  try {
+    const s = await storeApi("/status");
+    info.textContent = `${fmtNum(s.documents)} documents · ${fmtNum(s.pages)} pages · ${fmtNum(s.images)} images stored.`;
+  } catch (e) { info.textContent = "Could not read the version store."; }
+}
+
+document.getElementById("resetBtn").addEventListener("click", async () => {
+  const ok = await askConfirm({
+    title: "Clear the version store?",
+    text: "This permanently deletes all stored documents, pages and images in the version store (cache). Your real files are not affected.",
+    ok: "Clear everything",
+  });
+  if (!ok) return;
+  try {
+    await storeApi("/reset", {});
+    await refreshStore();
+  } catch (e) {
+    resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>Could not clear</strong>${escapeHtml(e.message)}</div>`;
+  }
+});
+
 (async function init() {
   updateRunLabel();
   try {
@@ -371,4 +457,5 @@ document.addEventListener("langchange", () => {
   } catch (e) {
     resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>${t("no_contact")}</strong>${escapeHtml(e.message)}</div>`;
   }
+  refreshStore();
 })();

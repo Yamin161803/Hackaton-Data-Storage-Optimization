@@ -115,6 +115,27 @@
       <div class="is-actions">
         <button class="is-btn" id="runBtn" type="button"></button>
       </div>
+
+      <div class="is-field" style="margin-top:6px">
+        <span class="is-field__label">Version store (cache)</span>
+        <p class="is-field__hint" id="storeInfo">&nbsp;</p>
+        <div class="is-actions">
+          <button class="is-btn is-btn--ghost is-btn--danger is-btn--sm" id="resetBtn" type="button">Clear the version store…</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Versions: compact list under Folders (left column) -->
+    <section class="is-card anim anim-2" id="treeSection" aria-labelledby="treeTitle" hidden>
+      <h2 class="is-section-title" id="treeTitle">
+        <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 22v-6M5 9l3 3M19 9l-3 3M4 20h16"/></svg></span>
+        Versions
+      </h2>
+      <p class="is-field__hint">New versions of stored files were found. Click one to open the version graph.</p>
+      <div class="is-tree-list" id="treeList"></div>
+      <div class="is-actions">
+        <a class="is-btn is-btn--ghost is-btn--sm" href="/versions" id="allVersionsLink">Open version graph</a>
+      </div>
     </section>
 
     <!-- Results -->

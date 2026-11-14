@@ -25,3 +25,9 @@ models/
 
 # Image object store blobs (content-addressed, regenerable)
 objects/
+
+# Corpus image object store blobs (content-addressed, regenerable)
+data/objects/
+# runtime store + dedupe index (regenerated)
+data/database
+data/slide_index.json
