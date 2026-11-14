@@ -53,6 +53,8 @@
   </section>
 
   <div class="grid-2">
+    <!-- Left column: Folders + Versions + Shared pictures stacked -->
+    <div class="is-col">
     <!-- Settings -->
     <section class="is-card anim anim-2" aria-labelledby="settingsTitle">
       <h2 class="is-section-title" id="settingsTitle">
@@ -126,7 +128,7 @@
       </div>
     </section>
 
-    <!-- Versions: compact list under Folders (left column) -->
+    <!-- Versions: multi-version families (left column, under Folders) -->
     <section class="is-card anim anim-2" id="treeSection" aria-labelledby="treeTitle" hidden>
       <h2 class="is-section-title" id="treeTitle">
         <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 22v-6M5 9l3 3M19 9l-3 3M4 20h16"/></svg></span>
@@ -139,12 +141,26 @@
       </div>
     </section>
 
-    <!-- Results -->
-    <section class="is-card is-lift anim anim-3" aria-labelledby="resultTitle" aria-live="polite">
-      <h2 class="is-section-title" id="resultTitle">
-        <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg></span>
-        <span data-i18n="results"></span>
+    <!-- Shared pictures: single-document picture savers (no download) -->
+    <section class="is-card anim anim-2" id="saversSection" aria-labelledby="saversTitle" hidden>
+      <h2 class="is-section-title" id="saversTitle">
+        <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v14H4z"/><circle cx="9" cy="10" r="2"/><path d="M4 17l5-4 4 3 3-2 4 3"/></svg></span>
+        Shared pictures
       </h2>
+      <p class="is-field__hint">Single files (no other versions) that got smaller because their pictures are shared/deduplicated.</p>
+      <div class="is-tree-list" id="saversList"></div>
+    </section>
+    </div><!-- /is-col left -->
+
+    <!-- Results (right column) -->
+    <section class="is-card is-lift anim anim-3" aria-labelledby="resultTitle" aria-live="polite">
+      <div class="is-result-head">
+        <h2 class="is-section-title" id="resultTitle">
+          <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg></span>
+          <span data-i18n="results"></span>
+        </h2>
+        <span class="is-result-time" id="resultTime"></span>
+      </div>
       <div id="resultBody">
         <p class="is-placeholder" data-i18n="d_placeholder"></p>
       </div>

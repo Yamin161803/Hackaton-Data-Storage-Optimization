@@ -60,15 +60,11 @@
           <span id="graphName">Version graph</span>
         </h2>
         <div class="is-graph-controls">
-          <div class="is-seg" role="group" data-i18n-attr="aria-label:direction_aria">
-            <button type="button" id="orientTB" aria-pressed="true" data-i18n="vertical">Vertical</button>
-            <button type="button" id="orientLR" aria-pressed="false" data-i18n="horizontal">Horizontal</button>
-          </div>
-          <button class="is-btn is-btn--ghost is-btn--sm" id="treeReset" type="button" data-i18n="reset_view" data-i18n-attr="title:reset_view_title">Reset</button>
-          <button class="is-btn is-btn--ghost is-btn--sm" id="treeFull" type="button" data-i18n="fullscreen" data-i18n-attr="title:fullscreen_title">Fullscreen</button>
+          <button class="is-btn is-btn--ghost is-btn--sm" id="treeReset" type="button" title="Reset view">Reset</button>
+          <button class="is-btn is-btn--ghost is-btn--sm" id="treeFull" type="button" title="Fullscreen (Esc to exit)">Fullscreen</button>
         </div>
       </div>
-      <p class="is-field__hint" data-i18n="vg_hint">Drag to pan, scroll to zoom. Click a version for details and download.</p>
+      <p class="is-field__hint" id="graphHint">Drag to pan, scroll to zoom. Click a version for details and download.</p>
       <div class="is-graph-surface">
         <div id="treeChart" class="is-graph-chart"></div>
         <div class="is-tree-savings" id="treeSavings"></div>

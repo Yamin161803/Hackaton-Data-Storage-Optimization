@@ -21,7 +21,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, send_file
 
 from store import Store
-from store.version_tree import family_with_savings, all_families
+from store.version_tree import family_with_savings, all_families, hypergraph, single_savers
 from store.regenerate import regenerate
 from website.i18n import msg
 
@@ -34,6 +34,17 @@ bp = Blueprint("version_tree", __name__)
 
 def _store() -> Store:
     return Store(DB_PATH, objects_dir=OBJECTS_DIR)
+
+
+@bp.route("/api/tree/single-savers")
+def list_single_savers():
+    """Single-document picture-savers (for the dedupe page table; no versions)."""
+    s = _store()
+    try:
+        savers = single_savers(s)
+    finally:
+        s.close()
+    return jsonify(savers=savers)
 
 
 @bp.route("/api/tree/families")
@@ -68,6 +79,23 @@ def list_documents():
          "date": r["created_at"]}
         for r in rows
     ])
+
+
+@bp.route("/api/tree/<doc_id>/hypergraph")
+def tree_hypergraph(doc_id):
+    """Slide/version hypergraph with fair-share per-version sizing."""
+    try:
+        doc_id = int(doc_id)
+    except ValueError:
+        return jsonify(detail="Invalid document id"), 400
+    s = _store()
+    try:
+        hg = hypergraph(s, doc_id)
+    finally:
+        s.close()
+    if not hg:
+        return jsonify(detail=f"No document with id {doc_id}"), 404
+    return jsonify(hg)
 
 
 @bp.route("/api/tree/<doc_id>")

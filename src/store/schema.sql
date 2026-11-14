@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS document_edge (
   relation    INTEGER NOT NULL,                 -- 1=extends (superset), 2=shortened (subset), 3=reordered, 4=modified
   added        INTEGER NOT NULL DEFAULT 0,      -- pages present in child but not parent
   removed      INTEGER NOT NULL DEFAULT 0,      -- pages present in parent but not child
+  shared       INTEGER NOT NULL DEFAULT 0,      -- pages present in BOTH (overlap). <=2 = weak link (bridge, not same family)
   PRIMARY KEY (parent_id, child_id)
 ) WITHOUT ROWID;
 

@@ -251,7 +251,7 @@ def _kor_rensning(target: Path, trash: Path | None, radera: bool, mode: str,
     # Ingest PDF/PPTX into the persistent corpus store so version families build
     # up across runs (the store is the cache). Collect any file that is a new
     # version belonging to a family (>1 node) so the page can show its tree.
-    report["version_trees"], report["images"], report["slides_count"] = _ingest_into_store(filer)
+    report["version_trees"], report["images"], report["slides_count"], report["content"] = _ingest_into_store(filer)
 
     raderat = None
     if radera and trash is not None and trash.is_dir():
@@ -268,7 +268,7 @@ def _kor_rensning(target: Path, trash: Path | None, radera: bool, mode: str,
     return report
 
 
-def _ingest_into_store(files: list[Path]) -> tuple[list[dict], dict, dict]:
+def _ingest_into_store(files: list[Path]) -> tuple[list[dict], dict, dict, dict]:
     """Ingest PDF/PPTX files into the corpus store (the cache).
 
     Returns (trees, images) where:
@@ -317,9 +317,22 @@ def _ingest_into_store(files: list[Path]) -> tuple[list[dict], dict, dict]:
                   "removed": max(0, total_images - unique_images)}
         slides = {"total": total_slides, "unique": unique_slides,
                   "removed": max(0, total_slides - unique_slides)}
+        # CONTENT-level savings: the real win is shared pages/images stored once
+        # (+ lossless image compression), which file-level dedup does NOT count.
+        # This is why a folder can save space on shared PDF/PPTX content yet show
+        # 0 whole files removed. Pull it from the image object store stats.
+        try:
+            istats = store.image_store().stats()
+        except Exception:
+            istats = {"original_bytes": 0, "stored_bytes": 0, "saved_bytes": 0}
+        content = {
+            "original_bytes": istats.get("original_bytes", 0),
+            "stored_bytes": istats.get("stored_bytes", 0),
+            "saved_bytes": istats.get("saved_bytes", 0),
+        }
     finally:
         store.close()
-    return trees, images, slides
+    return trees, images, slides, content
 
 
 def _tom_rapport(mode: str, trash: str | None) -> dict:
@@ -337,4 +350,5 @@ def _tom_rapport(mode: str, trash: str | None) -> dict:
         "removed": [], "kept": [], "moved_files": 0,
         "version_trees": [], "images": {"total": 0, "unique": 0, "removed": 0},
         "slides_count": {"total": 0, "unique": 0, "removed": 0},
+        "content": {"original_bytes": 0, "stored_bytes": 0, "saved_bytes": 0},
     }
