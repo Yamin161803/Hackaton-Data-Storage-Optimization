@@ -41,7 +41,7 @@ def names(folder: Path) -> list[str]:
 
 
 def test_page_and_script_are_served(client):
-    assert b"Rensa dubbletter" in client.get("/dedupe").data
+    assert b"Remove duplicates" in client.get("/dedupe").data
     assert client.get("/dedupe.js").status_code == 200
     assert b"dedupe.html" in client.get("/").data          # tab on the start page
 
@@ -127,3 +127,10 @@ def test_browse_lists_subfolders(client, folder):
     assert [x["name"] for x in d["dirs"]] == ["sub"]
     assert d["supported_files_here"] == 3 and d["parent"] == str(folder.parent)
     assert client.get(f"/api/dedupe/browse?path={folder / 'nope'}").status_code == 404
+
+
+def test_dedupe_messages_follow_the_page_language(client):
+    resp = client.get("/api/dedupe/browse?path=" + "/no/such/folder/xyz")
+    assert resp.status_code == 404 and "does not exist" in resp.get_json()["detail"]
+    resp = client.get("/api/dedupe/browse?path=/no/such/folder/xyz", headers={"X-Lang": "sv"})
+    assert resp.status_code == 404 and "finns inte" in resp.get_json()["detail"]
