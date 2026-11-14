@@ -118,6 +118,38 @@ def test_pdf_restore_is_pixel_identical(tmp_path):
     assert render_pixels(restored) == render_pixels(original)   # pixel-identical
 
 
+def test_pdf_restore_handles_chained_filters(tmp_path):
+    """Images with a /Filter CHAIN (e.g. [ASCII85Decode, FlateDecode]) must
+    restore pixel-identical — the whole chain has to be preserved, not just the
+    first filter. Regression test for real-world PDFs that failed this."""
+    import pikepdf
+    src = make_pdf_with_image(tmp_path / "doc.pdf", make_png((40, 160, 90)), pages=2)
+    # Re-encode one image XObject with a two-filter chain to mimic real PDFs.
+    pdf = pikepdf.open(str(src))
+    changed = False
+    for page in pdf.pages:
+        res = page.get("/Resources")
+        if not res or "/XObject" not in res:
+            continue
+        for name in res["/XObject"].keys():
+            o = res["/XObject"][name]
+            if o.get("/Subtype") == pikepdf.Name("/Image"):
+                decoded = o.read_bytes()
+                o.write(decoded, filter=pikepdf.Array(
+                    [pikepdf.Name("/ASCII85Decode"), pikepdf.Name("/FlateDecode")]))
+                changed = True
+    chained = tmp_path / "chained.pdf"
+    pdf.save(str(chained)); pdf.close()
+    if not changed:
+        import pytest; pytest.skip("no image xobject to re-encode")
+
+    original = chained.read_bytes()
+    store = ImageStore(tmp_path / "img")
+    skel_bytes, skel = store_pdf(chained, store)
+    restored = restore_pdf(skel_bytes, skel, store)
+    assert render_pixels(restored) == render_pixels(original)
+
+
 def test_pdf_skeleton_is_smaller_than_original(tmp_path):
     # a big image makes the skeleton much smaller than the original
     big = make_png((123, 222, 99), size=(1000, 800))

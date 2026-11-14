@@ -22,14 +22,30 @@ from .image_store import ImageStore
 _PLACEHOLDER = b""
 
 
-def _filter_name(obj) -> str | None:
+def _filter_names(obj) -> list[str] | None:
+    """Full /Filter chain as a list of names, e.g. ['/ASCII85Decode','/FlateDecode'].
+
+    PDF image streams may chain several filters; we must restore ALL of them in
+    order, not just the first, or the stream decodes wrong (wrong pixels).
+    """
     filt = obj.get("/Filter")
     if filt is None:
         return None
     try:
-        return str(filt[0]) if isinstance(filt, pikepdf.Array) else str(filt)
+        if isinstance(filt, pikepdf.Array):
+            return [str(x) for x in filt]
+        return [str(filt)]
     except Exception:
         return None
+
+
+def _to_filter(names: list[str] | None):
+    """Rebuild a pikepdf filter value from a list of names (name or Array)."""
+    if not names:
+        return None
+    if len(names) == 1:
+        return pikepdf.Name(names[0])
+    return pikepdf.Array([pikepdf.Name(n) for n in names])
 
 
 def _iter_image_xobjects(pdf):
@@ -74,11 +90,11 @@ def store_pdf(path: str | Path, images: ImageStore) -> tuple[bytes, dict]:
             raw = obj.read_raw_bytes()
         except Exception:
             continue
-        filter_name = _filter_name(obj)         # BEFORE blanking
+        filter_names = _filter_names(obj)       # BEFORE blanking (full chain)
         h = images.put(raw).hash
         img_entries.append({
             "index": idx, "hash": h, "size": len(raw),
-            "filter_name": filter_name,
+            "filter_names": filter_names,
         })
         obj.write(_PLACEHOLDER)                  # blank; restore puts it back
 
@@ -97,9 +113,9 @@ def restore_pdf(skeleton_pdf_bytes: bytes, skeleton: dict, images: ImageStore) -
         if entry is None:
             continue
         raw = images.get_original(entry["hash"])
-        fname = entry.get("filter_name")
-        if fname:
-            obj.write(raw, filter=pikepdf.Name(fname))
+        filt = _to_filter(entry.get("filter_names"))
+        if filt is not None:
+            obj.write(raw, filter=filt)
         else:
             obj.write(raw)
     out = io.BytesIO()
