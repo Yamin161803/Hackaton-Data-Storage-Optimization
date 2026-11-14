@@ -122,9 +122,13 @@ def test_pdf_restore_handles_chained_filters(tmp_path):
     """Images with a /Filter CHAIN (e.g. [ASCII85Decode, FlateDecode]) must
     restore pixel-identical — the whole chain has to be preserved, not just the
     first filter. Regression test for real-world PDFs that failed this."""
+    import base64
+    import zlib
     import pikepdf
     src = make_pdf_with_image(tmp_path / "doc.pdf", make_png((40, 160, 90)), pages=2)
-    # Re-encode one image XObject with a two-filter chain to mimic real PDFs.
+    # Re-encode one image XObject with a two-filter chain to mimic real PDFs:
+    # /Filter [ASCII85Decode FlateDecode] decodes ASCII85 then Flate, so we
+    # encode Flate then ASCII85 and set the filter array on the stream dict.
     pdf = pikepdf.open(str(src))
     changed = False
     for page in pdf.pages:
@@ -135,13 +139,16 @@ def test_pdf_restore_handles_chained_filters(tmp_path):
             o = res["/XObject"][name]
             if o.get("/Subtype") == pikepdf.Name("/Image"):
                 decoded = o.read_bytes()
-                o.write(decoded, filter=pikepdf.Array(
-                    [pikepdf.Name("/ASCII85Decode"), pikepdf.Name("/FlateDecode")]))
+                encoded = base64.a85encode(zlib.compress(decoded))
+                o.write(encoded)
+                o.stream_dict["/Filter"] = pikepdf.Array(
+                    [pikepdf.Name("/ASCII85Decode"), pikepdf.Name("/FlateDecode")])
                 changed = True
     chained = tmp_path / "chained.pdf"
     pdf.save(str(chained)); pdf.close()
     if not changed:
-        import pytest; pytest.skip("no image xobject to re-encode")
+        import pytest
+        pytest.skip("no image xobject to re-encode")
 
     original = chained.read_bytes()
     store = ImageStore(tmp_path / "img")
