@@ -12,6 +12,7 @@ const TEXT = {
     // ---------- shared ----------
     app_title: "Video notes",
     dedupe_title: "Remove duplicates",
+    versions_title: "Versions",
     home_aria: "Video notes, home page",
     pages_aria: "Pages",
     theme_aria: "Toggle dark mode",
@@ -184,6 +185,7 @@ const TEXT = {
   sv: {
     app_title: "Videoanteckningar",
     dedupe_title: "Rensa dubbletter",
+    versions_title: "Versioner",
     home_aria: "Videoanteckningar, startsida",
     pages_aria: "Sidor",
     theme_aria: "Växla mörkt läge",

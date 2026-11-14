@@ -7,8 +7,12 @@ compressed). The "skeleton" records every archive entry in order; media entries
 are stored as a reference (their image hash) instead of raw bytes.
 
 Restore rebuilds the ZIP from the skeleton, putting the EXACT original image
-bytes back into their original entries -> the restored .pptx is byte-identical
-to the original (so it obviously looks identical).
+bytes back into their original entries -> every entry of the restored .pptx
+(slides, media, notes) is byte-identical to the original, in the same order, so
+it looks identical. The ZIP container itself is byte-identical when it was
+written by python-pptx/zipfile; a deck saved by PowerPoint uses a different
+deflate encoder, so its restored file can differ in size while every part inside
+is the same.
 
     skel = store_pptx("deck.pptx", image_store)      # returns a skeleton dict
     data = restore_pptx(skel, image_store)           # bytes identical to original

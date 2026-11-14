@@ -2,7 +2,7 @@
 """Easy launcher for the project's apps. Works the same on Windows, macOS and Linux.
 
     python run.py                      menu: pick what to run
-    python run.py setup                install the Python packages
+    python run.py setup                install the Python packages (--speakers: + speaker labels)
     python run.py check                show what is installed and what is missing
     python run.py web                  start the website and open it in the browser
     python run.py notes <video|folder> make meeting notes (extra options go to src/app.py)
@@ -16,7 +16,6 @@ so activate your virtual environment first if you use one.
 """
 from __future__ import annotations
 
-import argparse
 import importlib.util
 import os
 import shutil
@@ -28,6 +27,10 @@ import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+# Child processes print transcripts in any language; UTF-8 keeps a Windows console
+# code page (cp1252) from garbling them or failing on characters it does not have.
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+os.environ.setdefault("PYTHONUTF8", "1")
 SRC = ROOT / "src"
 PY = sys.executable
 
@@ -47,17 +50,25 @@ def run(*args: str | Path) -> int:
 
 # ---------------------------------------------------------------- commands
 
-def cmd_setup(_extra: list[str]) -> int:
-    code = run(PY, "-m", "pip", "install", "-r", ROOT / "requirements.txt", "faster-whisper")
+def cmd_setup(extra: list[str]) -> int:
+    files = ["-r", ROOT / "requirements.txt"]
+    if "--speakers" in extra:
+        files += ["-r", ROOT / "requirements-speakers.txt"]
+    code = run(PY, "-m", "pip", "install", *files)
     if code == 0:
-        print("\nDone. Optional extras (see HOW_TO_RUN.md):")
+        print("\nDone. Check what is ready:  python run.py check")
+        print("Optional extras (see HOW_TO_RUN.md):")
         print("  summaries/keywords: install Ollama, then  ollama pull llama3.2")
-        print("  speaker labels:     pip install pyannote.audio torch soundfile  + .hf_token")
+        if "--speakers" not in extra:
+            print("  speaker labels:     python run.py setup --speakers  + a .hf_token file")
     return code
 
 
 def _has(module: str) -> bool:
-    return importlib.util.find_spec(module) is not None
+    try:
+        return importlib.util.find_spec(module) is not None
+    except ImportError:          # "pyannote.audio" when "pyannote" itself is missing
+        return False
 
 
 def _ollama_running() -> bool:
@@ -97,8 +108,10 @@ def cmd_check(_extra: list[str]) -> int:
     opt = "--     "
     rows = [
         (sys.version_info >= (3, 10), True, f"Python {sys.version.split()[0]} (3.10+ needed)"),
-        (_has("numpy") and _has("flask") and _has("pypdf") and _has("pptx") and _has("PIL"),
+        (all(map(_has, ("numpy", "flask", "pypdf", "pptx", "PIL", "pikepdf", "reportlab"))),
          True, "packages from requirements.txt  ->  python run.py setup"),
+        (_has("pytest") and _has("pymupdf"), False,
+         "test packages (pytest, pymupdf)  ->  python run.py setup"),
         (_has("faster_whisper"), True, "faster-whisper (speech to text)  ->  python run.py setup"),
         (bool(shutil.which("ffmpeg")) or _has("imageio_ffmpeg"), True,
          "ffmpeg (system or imageio-ffmpeg)"),

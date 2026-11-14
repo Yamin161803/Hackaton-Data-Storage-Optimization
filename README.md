@@ -11,7 +11,12 @@ what's in them.
 - **Duplicate cleanup for slides and documents.** Every slide in PDF / PowerPoint /
   image files is hashed, and only the fewest files that still hold every unique slide
   are kept.
-- **A local website** that does both from the browser.
+- **A document store with versions.** PDFs and decks are stored page by page: a page or
+  picture shared by many files is stored once, new versions of a deck are linked into a
+  version tree, the text is searchable, and every file can be restored (PDFs
+  pixel-identical).
+- **A local website** that does all of this from the browser (English, with a Swedish
+  option).
 
 Everything runs locally: speech to text uses faster-whisper (GPU if present, otherwise
 CPU), and summaries and keywords come from a local model through Ollama.
@@ -19,13 +24,23 @@ CPU), and summaries and keywords come from a local model through Ollama.
 ## Quick start
 
 ```bash
-python run.py setup     # install
-python run.py check     # what is ready
-python run.py           # menu, or: python run.py web | notes <video> | dedupe <folder>
+python run.py setup     # install (Python 3.10+)
+python run.py check     # what is ready, what is missing
+python run.py web       # the website: http://localhost:8000
 ```
 
-See [HOW_TO_RUN.md](HOW_TO_RUN.md) for every command. The rest of this README explains
-the tools themselves.
+Small test files are in [samples/](samples/README.md): three 90-second video clips, an
+audio clip, and PDFs and decks with a planted exact copy, a shortened version and a
+newer version. For example:
+
+```bash
+python run.py notes samples/video/graalvm_talk_clip.mp4           # meeting notes
+python run.py dedupe samples/docs --mode batch --index samples_index.json
+```
+
+[samples/README.md](samples/README.md) lists what each file tests and the expected
+results. [HOW_TO_RUN.md](HOW_TO_RUN.md) covers every command and option, plus
+troubleshooting. The rest of this README explains how the tools work.
 
 ## Setup
 
@@ -33,11 +48,16 @@ Python 3.10+.
 
 ```bash
 cd Hackaton-Data-Storage-Optimization
-uv venv .venv --python 3.10          # or: python -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\activate
-uv pip install -r requirements.txt   # numpy, flask, imageio-ffmpeg, pypdf, python-pptx, pillow, pytest
-uv pip install faster-whisper        # speech to text (not in requirements.txt)
+python -m venv .venv                 # optional, recommended
+.venv\Scriptsctivate               # macOS/Linux: source .venv/bin/activate
+python run.py setup                  # = pip install -r requirements.txt
+python run.py setup --speakers       # + requirements-speakers.txt (pyannote, torch)
 ```
+
+| File | Contains |
+| --- | --- |
+| `requirements.txt` | everything needed to run the project and its tests: faster-whisper, imageio-ffmpeg, numpy, flask, pypdf, python-pptx, pillow, pikepdf, reportlab, pytest, pymupdf |
+| `requirements-speakers.txt` | optional speaker labels: pyannote.audio 4, torch, soundfile |
 
 ffmpeg: a system `ffmpeg` on `PATH` is used if there is one, otherwise the one bundled
 with `imageio-ffmpeg`.
@@ -47,8 +67,12 @@ Optional extras:
 | For | Install |
 | --- | --- |
 | Summary and keywords | [Ollama](https://ollama.com), then `ollama pull llama3.2` (the default model; change it with `--model`) |
-| Speaker labels (`--speakers`) | `pip install pyannote.audio torch soundfile`, plus a Hugging Face token in `HF_TOKEN` or a `.hf_token` file in the project folder. The pyannote model is gated, so accept its terms once on huggingface.co. |
-| GPU (CUDA) | `uv pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` |
+| Speaker labels (`--speakers`) | `python run.py setup --speakers`, plus a Hugging Face token in `HF_TOKEN` or a `.hf_token` file in the project folder. The pyannote model (`pyannote/speaker-diarization-community-1`) is gated, so accept its terms once on huggingface.co. |
+| GPU for transcription | `pip install nvidia-cublas-cu12 nvidia-cudnn-cu12` |
+| GPU for speaker labels | the CUDA build of PyTorch, see [HOW_TO_RUN.md](HOW_TO_RUN.md#gpu-for-speaker-labels) |
+
+Without the optional parts everything still works: the notes are written without a
+summary, keywords or speaker labels.
 
 ### GPU
 
@@ -58,8 +82,10 @@ The device is detected automatically:
 - no GPU → `cpu` + `int8`
 
 So the same code runs on a laptop and on a GPU box without changes. If a GPU is visible
-but its CUDA libraries are missing, `app.py` falls back to the CPU. Check that the GPU
-is found:
+but its CUDA libraries are missing, `app.py` falls back to the CPU. Speaker labels
+(pyannote) also run on the GPU when PyTorch is a CUDA build, and fall back to the CPU if
+the GPU runs out of memory (in our tests on a GTX 1660 Ti: 32 s instead of 250 s on
+the CPU). Check that the GPU is found:
 
 ```bash
 python -c "import ctranslate2; print('CUDA devices:', ctranslate2.get_cuda_device_count())"
@@ -157,11 +183,18 @@ something you asked for, the video is processed again.
 the run time and how much space removing the rejected files would free. Optionally it
 moves them to a trash folder (default `data/trash`), and, after you confirm, empties
 that folder automatically or on demand. Nothing is deleted if the folder changed since
-you confirmed. Every web run uses a fresh index, so the whole folder is analysed each
-time.
+you confirmed. Every web run uses a fresh dedupe index, so the whole folder is analysed
+each time. The PDFs and decks are also added to the document store (`data/database`,
+`data/objects`), and files that belong to a version family show their version tree.
 
-**Language:** the pages are in English; the **EN / SV** switch in the header changes them
-to Swedish (the choice is remembered in the browser). All page text is in
+**Versions** (`/versions`): every version family in the store as a graph (original,
+extended, shortened, reordered or modified versions), with the space the page-level
+dedup saved. Any node can be downloaded again as a file restored from the store.
+
+**Language:** the pages are in English; the **EN / SV** switch in the header changes the
+Video notes and Remove duplicates pages to Swedish (the choice is remembered in the
+browser). The version-store parts (the store box, the version list and the Versions
+page) are English only so far. All page text is in
 `src/website/static/i18n.js`, and the server's messages are in `src/website/i18n.py`;
 the page sends its language in the `X-Lang` header.
 
@@ -221,10 +254,13 @@ and GPU throughput. `distil-large-v3` is a faster, English-only alternative to
 ## Tests
 
 ```bash
-python -m pytest tests
+python run.py test          # = python -m pytest tests -q
 ```
 
-Speech recognition and Ollama are replaced by fakes, so the tests run fast and offline.
+About 260 tests, which take about 30 s. Speech recognition, pyannote and Ollama are
+replaced by fakes, so the tests run offline and need no GPU or models. A test module
+whose optional package is missing is skipped rather than failing; `python run.py setup`
+installs everything the tests need.
 
 ## Project layout
 
@@ -238,11 +274,14 @@ src/
   notes/              meeting_notes.py (Markdown), summarize.py (Ollama), pdf_to_markdown.py
   dedupe/             slide_dedupe.py (duplicate slide/document cleanup)
   store/              document store: page-level dedup, versions, shared images, search
-  website/            Flask server, dedupe_api.py, static pages
+  website/            Flask server, dedupe_api.py, version_tree_api.py, i18n.py
+  website/static/     index.html, dedupe.html, versions.html, i18n.js (EN/SV texts)
+samples/              small test files (videos, audio, PDFs, decks); see samples/README.md
 tests/                pytest tests for all of the above
 data/                 raw/, meeting_notes/, resources/, trash/ (contents git-ignored),
-                      slide_index.json, database
+                      slide_index.json, database + objects/ (document store)
 docs/                 notes.txt (design notes), ericsson.pdf (challenge brief)
+run.py                launcher for every tool (python run.py -h)
 ```
 
 ## Document store (PDFs & slide decks) — dedup + versioning + search
@@ -272,7 +311,35 @@ How it works (see the schema in `src/store/schema.sql`):
 Extractors (e.g. the PDF/PPTX handlers) produce `store.Page` objects and hand a
 `store.DocumentInput` to `Store.ingest(...)`.
 
-Search and inspect:
+The store lives in `data/database` (SQLite) with its pictures under `data/objects/`.
+The **Remove duplicates** page adds every PDF and deck it checks. From the command line:
+
+```bash
+cd src
+python -m store.ingest_files ../data/database ../samples/docs/*      # add files
+```
+
+```text
+C2L_Presentation_Hackathon_RevB.pdf: exact duplicate of doc 5813... (discarded)
+C2L_Presentation_short.pdf: stored doc -7589... (0 new / 15 shared pages)
+SD-WAN ... final2.pptx: stored doc 1566... (0 new / 25 shared pages)
+```
+
+**Restoring files.** Besides the page manifest, each PDF and deck keeps a small
+"skeleton": the original file with its pictures taken out and replaced by references
+into the shared image store (`src/store/pdf_skeleton.py`, `pptx_skeleton.py`).
+`Store.restore_original(doc_id)` puts the exact picture bytes back:
+
+- **PDF:** pixel-identical to the original (checked page by page in
+  `tests/test_skeleton.py`).
+- **PPTX:** every part of the deck (slides, pictures, notes) is byte-identical. The ZIP
+  packaging of a deck saved by PowerPoint can be compressed differently, so the file
+  size can differ slightly.
+
+The **Versions** page's download button uses this. Documents stored without a skeleton
+fall back to a rebuild from text and pictures (`src/store/regenerate.py`).
+
+Search and inspect (the default database is `data/database`; use `--db` for another):
 
 ```bash
 # keyword search over page/slide text (FTS5), sortable/filterable
@@ -297,14 +364,14 @@ without false merge, shorten-and-re-add, extend, content-not-filename identity).
   a *visual duplicate* (`IngestResult.visual_duplicates`) — a reworded slide,
   not an unrelated new page. **PDF** keeps a combined text+image identity.
 - **Shared image object store:** pictures from PDFs *and* decks are stored once,
-  content-addressed and sharded on disk under `objects/ab/cd/<hash>`. If 100
+  content-addressed and sharded on disk under `data/objects/ab/cd/<hash>`. If 100
   documents use the same logo, the bytes live on disk once; `page_image` records
   which pages reference it (so nothing is deleted while referenced). A document
   can be rebuilt from its text plus the single stored copy of each picture:
 
   ```python
   from store import Store, DocumentInput, Page, SOURCE_PDF
-  s = Store("database")
+  s = Store("data/database")
   img = s.put_image(open("logo.png", "rb").read())   # stored once; returns hash
   page = Page(text="page text", image_hashes=[img])
   s.ingest(DocumentInput(full_hash=..., file_size=..., source_type=SOURCE_PDF,

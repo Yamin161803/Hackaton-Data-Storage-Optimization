@@ -1,12 +1,22 @@
-imageio-ffmpeg>=0.4
+# Everything needed to run the project and its tests:  python run.py setup
+# (or: pip install -r requirements.txt). Python 3.10+.
+# Optional speaker labels are in requirements-speakers.txt.
+
+# video -> meeting notes (src/app.py, src/video_splitter, src/transcription)
+faster-whisper>=1.0          # speech to text (uses the GPU when CUDA is available)
+imageio-ffmpeg>=0.4          # bundled ffmpeg, used when no system ffmpeg is on PATH
 numpy>=1.24
+
+# website (src/website)
 flask>=2.2
-# duplicate cleanup (src/dedupe) and PDF -> Markdown (src/notes)
+
+# slides and documents (src/dedupe, src/store, src/notes/pdf_to_markdown.py)
 pypdf>=4
 python-pptx>=1.0
 pillow>=10
-# tests
+pikepdf>=10                  # pixel-identical PDF storage + restore (src/store/pdf_skeleton.py)
+reportlab>=4                 # rebuilding a stored document version as a PDF
+
+# tests (python run.py test)
 pytest>=8
-reportlab>=4
 pymupdf>=1.28
-pikepdf>=10
