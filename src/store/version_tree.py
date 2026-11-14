@@ -69,7 +69,9 @@ def version_family(store: Store, doc_id: int) -> dict:
     nodes = []
     for rank, r in enumerate(node_rows):
         nodes.append({
-            "id": r["id"],
+            # ids are 64-bit ints -> send as STRINGS so JS doesn't round them
+            # (JS numbers lose precision beyond 2^53, which breaks /api/tree/<id>).
+            "id": str(r["id"]),
             "name": r["source_name"] or r["title"] or f"doc {r['id']}",
             "date": r["created_at"],
             "pages": r["page_count"],
@@ -84,14 +86,14 @@ def version_family(store: Store, doc_id: int) -> dict:
     ).fetchall():
         if e["parent_id"] in node_ids and e["child_id"] in node_ids:
             edges.append({
-                "parent": e["parent_id"], "child": e["child_id"],
+                "parent": str(e["parent_id"]), "child": str(e["child_id"]),
                 "relation": RELATION_NAMES.get(e["relation"], "?"),
                 "added": e["added"], "removed": e["removed"],
             })
 
     root = node_rows[0]["id"] if node_rows else doc_id
     return {
-        "root": root,
+        "root": str(root),
         "source_type": SOURCE_NAMES.get(source_type, "?"),
         "nodes": nodes,
         "edges": edges,
@@ -171,5 +173,6 @@ def family_with_savings(store: Store, doc_id: int) -> dict:
     fam = version_family(store, doc_id)
     if not fam:
         return {}
-    fam["savings"] = savings(store, [n["id"] for n in fam["nodes"]])
+    # node ids are stringified for JS safety; savings SQL needs the ints back
+    fam["savings"] = savings(store, [int(n["id"]) for n in fam["nodes"]])
     return fam

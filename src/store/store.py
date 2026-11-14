@@ -193,6 +193,44 @@ class Store:
     def close(self) -> None:
         self.conn.close()
 
+    def reset(self) -> dict:
+        """Wipe the corpus store: all documents/pages/images and the object blobs.
+
+        DESTRUCTIVE. Clears the corpus tables and deletes the content-addressed
+        image blobs under objects_dir. Returns counts of what was removed.
+        The schema is recreated so the store is immediately usable again.
+        """
+        counts = {}
+        for tbl in ("document", "page", "document_page", "document_edge",
+                    "page_image", "image", "image_hash"):
+            try:
+                counts[tbl] = self.conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
+            except Exception:
+                counts[tbl] = 0
+        # Drop corpus tables (leave any non-corpus tables in the shared DB alone).
+        for tbl in ("document_edge", "document_page", "page_image", "page_fts",
+                    "page", "image_hash", "image", "document"):
+            self.conn.execute(f"DROP TABLE IF EXISTS {tbl}")
+        self.conn.commit()
+
+        blobs_removed = 0
+        if self.objects_dir.exists():
+            for p in self.objects_dir.rglob("*"):
+                if p.is_file():
+                    p.unlink()
+                    blobs_removed += 1
+            # remove now-empty shard dirs
+            for p in sorted(self.objects_dir.rglob("*"), reverse=True):
+                if p.is_dir():
+                    try:
+                        p.rmdir()
+                    except OSError:
+                        pass
+        counts["blobs"] = blobs_removed
+
+        self._ensure_schema()   # recreate empty tables
+        return counts
+
     # -- queries --
 
     def find_document_by_full_hash(self, full_hash: str) -> int | None:

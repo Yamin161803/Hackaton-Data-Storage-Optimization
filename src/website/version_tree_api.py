@@ -48,7 +48,7 @@ def list_documents():
         s.close()
     names = {1: "pdf", 2: "pptx"}
     return jsonify(documents=[
-        {"id": r["id"], "name": r["source_name"] or f"doc {r['id']}",
+        {"id": str(r["id"]), "name": r["source_name"] or f"doc {r['id']}",
          "type": names.get(r["source_type"], "?"), "pages": r["page_count"],
          "date": r["created_at"]}
         for r in rows
@@ -69,7 +69,7 @@ def tree(doc_id):
         s.close()
     if not fam:
         return jsonify(detail=f"No document with id {doc_id}"), 404
-    fam["selected"] = doc_id          # the node the UI should highlight
+    fam["selected"] = str(doc_id)     # the node the UI should highlight (string: 64-bit safe)
     return jsonify(fam)
 
 

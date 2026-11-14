@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 </head>
 <body>
 
@@ -111,6 +112,14 @@
       <div class="is-actions">
         <button class="is-btn" id="runBtn" type="button">Analysera</button>
       </div>
+
+      <div class="is-field" style="margin-top:6px">
+        <span class="is-field__label">Versionslager (cache)</span>
+        <p class="is-field__hint" id="storeInfo">&nbsp;</p>
+        <div class="is-actions">
+          <button class="is-btn is-btn--ghost is-btn--danger is-btn--sm" id="resetBtn" type="button">Rensa versionslagret…</button>
+        </div>
+      </div>
     </section>
 
     <!-- Resultat -->
@@ -124,6 +133,34 @@
       </div>
     </section>
   </div>
+
+  <!-- Versioner: full bredd under rutnätet, så den aldrig hamnar bredvid Mappar -->
+  <section class="is-card is-graph-card anim anim-3" id="treeSection" aria-labelledby="treeTitle" hidden>
+    <div class="is-graph-toolbar">
+      <h2 class="is-section-title" id="treeTitle">
+        <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 22v-6M5 9l3 3M19 9l-3 3M4 20h16"/></svg></span>
+        Versioner
+      </h2>
+      <div class="is-graph-controls">
+        <div class="is-seg" role="group" aria-label="Riktning">
+          <button type="button" id="orientTB" aria-pressed="true">Lodrätt</button>
+          <button type="button" id="orientLR" aria-pressed="false">Vågrätt</button>
+        </div>
+        <button class="is-btn is-btn--ghost is-btn--sm" id="treeReset" type="button" title="Återställ vy">Återställ</button>
+        <button class="is-btn is-btn--ghost is-btn--sm" id="treeFull" type="button" title="Helskärm (Esc för att stänga)">Helskärm</button>
+      </div>
+    </div>
+    <p class="is-field__hint" id="treeHint">Välj en fil i tabellen för att se dess versionsträd. Dra för att panorera, scrolla för att zooma.</p>
+    <div class="is-tree-layout">
+      <div class="is-tree-picker" id="treePicker" role="table" aria-label="Versionsfamiljer"></div>
+      <div class="is-graph-surface">
+        <div id="treeChart" class="is-graph-chart"></div>
+        <div class="is-tree-savings" id="treeSavings"></div>
+        <div class="is-node-popover" id="nodePopover" hidden></div>
+      </div>
+    </div>
+    <div class="is-tree-dl" id="treeDl"></div>
+  </section>
 </main>
 
 <!-- Bekräfta radering -->

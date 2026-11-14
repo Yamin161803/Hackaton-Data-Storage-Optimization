@@ -34,6 +34,8 @@ PROJECT_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_DIR / "data"
 DEFAULT_TARGET = DATA_DIR / "raw"
 DEFAULT_TRASH = DATA_DIR / "trash"
+_DB_PATH = DATA_DIR / "database"          # corpus store (cache, persists across runs)
+_OBJECTS_DIR = DATA_DIR / "objects"       # content-addressed image blobs
 
 bp = Blueprint("dedupe", __name__)
 _KOR_LAS = threading.Lock()  # en rensning åt gången
@@ -202,6 +204,33 @@ def kor():
         _KOR_LAS.release()
 
 
+@bp.route("/api/store/status")
+def store_status():
+    """How many documents/pages/images are cached in the store."""
+    from store import Store
+    s = Store(_DB_PATH, objects_dir=_OBJECTS_DIR)
+    try:
+        docs = s.conn.execute("SELECT COUNT(*) FROM document").fetchone()[0]
+        pages = s.conn.execute("SELECT COUNT(*) FROM page").fetchone()[0]
+        images = s.conn.execute("SELECT COUNT(*) FROM image").fetchone()[0]
+    finally:
+        s.close()
+    return jsonify(documents=docs, pages=pages, images=images)
+
+
+@bp.route("/api/store/reset", methods=["POST"])
+def store_reset():
+    """DESTRUCTIVE: wipe the whole corpus store (documents/pages/images + blobs)."""
+    from store import Store
+    with _KOR_LAS:                      # don't reset while a run ingests
+        s = Store(_DB_PATH, objects_dir=_OBJECTS_DIR)
+        try:
+            removed = s.reset()
+        finally:
+            s.close()
+    return jsonify(reset=True, removed=removed)
+
+
 def _kor_rensning(target: Path, trash: Path | None, radera: bool, mode: str,
                   fast_images: bool) -> dict:
     t0 = time.perf_counter()
@@ -215,6 +244,11 @@ def _kor_rensning(target: Path, trash: Path | None, radera: bool, mode: str,
             profile=None, snakeviz=False, top=10, quiet=True)
         report, _, _ = (analyze(args) if filer else (_tom_rapport(mode, args.trash), None, None))
     report = json.loads(json.dumps(report))  # bara JSON-typer (inga Path/set)
+
+    # Ingest PDF/PPTX into the persistent corpus store so version families build
+    # up across runs (the store is the cache). Collect any file that is a new
+    # version belonging to a family (>1 node) so the page can show its tree.
+    report["version_trees"], report["images"] = _ingest_into_store(filer)
 
     raderat = None
     if radera and trash is not None and trash.is_dir():
@@ -231,6 +265,55 @@ def _kor_rensning(target: Path, trash: Path | None, radera: bool, mode: str,
     return report
 
 
+def _ingest_into_store(files: list[Path]) -> tuple[list[dict], dict]:
+    """Ingest PDF/PPTX files into the corpus store (the cache).
+
+    Returns (trees, images) where:
+      trees  = list of {doc_id, name, status, family_size} for files that end up
+               in a VERSION FAMILY (>1 node) so the page can render its tree.
+      images = {"total": N, "unique": M} image counts across the whole store
+               (total occurrences before dedup vs unique pictures stored once).
+    """
+    from store import Store, SOURCE_PDF, SOURCE_PPTX
+    from store.ingest_files import ingest_file
+    from store.version_tree import version_family
+
+    trees = []
+    seen_families: set[int] = set()
+    store = Store(_DB_PATH, objects_dir=_OBJECTS_DIR)
+    try:
+        for f in files:
+            if f.suffix.lower() not in (".pdf", ".pptx"):
+                continue
+            try:
+                result = ingest_file(store, f)
+            except Exception:
+                continue
+            doc_id = result.document_id
+            if doc_id is None:
+                continue
+            fam = version_family(store, doc_id)
+            if not fam or len(fam.get("nodes", [])) <= 1:
+                continue                      # unrelated single doc -> no tree
+            root = fam["root"]
+            if root in seen_families:
+                continue                      # one tree per family
+            seen_families.add(root)
+            trees.append({
+                "doc_id": str(doc_id),       # the file from THIS run (highlight it); string = 64-bit safe
+                "name": f.name,
+                "status": result.status,      # stored | duplicate | content_duplicate
+                "family_size": len(fam["nodes"]),
+                "source_type": fam["source_type"],
+            })
+        total_images = store.conn.execute("SELECT COUNT(*) FROM page_image").fetchone()[0]
+        unique_images = store.conn.execute("SELECT COUNT(*) FROM image").fetchone()[0]
+        images = {"total": total_images, "unique": unique_images}
+    finally:
+        store.close()
+    return trees, images
+
+
 def _tom_rapport(mode: str, trash: str | None) -> dict:
     """Rapporten när mappen saknar PDF/PPTX/bilder."""
     return {
@@ -244,4 +327,5 @@ def _tom_rapport(mode: str, trash: str | None) -> dict:
                  "parse_mb_per_second": 0.0, "est_seconds_saved_by_prefilter": 0.0},
         "prefilter": {}, "phases": {}, "slowest_files": [], "hints": [],
         "removed": [], "kept": [], "moved_files": 0,
+        "version_trees": [], "images": {"total": 0, "unique": 0},
     }

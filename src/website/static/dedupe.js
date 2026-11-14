@@ -63,6 +63,17 @@ async function api(path, body) {
 }
 const getTrash = () => api(`/trash?path=${encodeURIComponent(trashInput.value.trim())}`);
 
+// Store (versionslager) endpoints live under /api/store, not /api/dedupe.
+const STORE_API = API.replace(/\/api\/dedupe$/, "/api/store");
+async function storeApi(path, body) {
+  const opts = body === undefined ? {} :
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const resp = await fetch(`${STORE_API}${path}`, opts);
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw Object.assign(new Error(data.detail || `Fel ${resp.status}`), { status: resp.status });
+  return data;
+}
+
 function setStep(n) {
   document.querySelectorAll(".is-step").forEach(el => el.classList.toggle("is-active", +el.dataset.step === n));
 }
@@ -320,7 +331,8 @@ function renderReport(r, roundTrip) {
       <dt>Hittade</dt><dd>${fmtNum(fl.found)}</dd>
       <dt>Identiska kopior (hittade utan att öppnas)</dt><dd>${fmtNum(fl.duplicates_by_content)}</dd>
       <dt>Lästa</dt><dd>${fmtNum(fl.parsed)}</dd>
-      <dt>Unika bilder</dt><dd>${fmtNum(r.slides.unique)}</dd>
+      <dt>Totala bilder</dt><dd>${fmtNum((r.images || {}).total)}</dd>
+      <dt>Unika bilder</dt><dd>${fmtNum((r.images || {}).unique ?? r.slides.unique)}</dd>
       ${fl.errors ? `<dt>Kunde inte läsas</dt><dd>${fmtNum(fl.errors)}</dd>` : ""}
     </dl>
 
@@ -338,9 +350,220 @@ function renderReport(r, roundTrip) {
     ${removedRows ? `<h3 class="is-subhead">Avvisade filer (${fmtNum(r.removed.length)})</h3><div class="is-filelist">${removedRows}</div>` : ""}
     ${(r.hints || []).map(h => `<p class="is-field__hint" style="margin-top:12px">Tips: ${escapeHtml(h)}</p>`).join("")}
   `;
+  renderVersionTrees(r.version_trees || []);
 }
 
+/* ---------- Versionsträd: tabell att välja ur + en zoombar ECharts-graf ---------- */
+let _treeChart = null;          // ECharts-instans
+let _families = [];             // [{meta, fam}] för körningen
+let _selectedIdx = 0;
+
+async function renderVersionTrees(trees) {
+  const section = document.getElementById("treeSection");
+  if (!section) return;
+  if (!trees.length) { section.hidden = true; return; }
+
+  // Hämta varje familj en gång
+  _families = [];
+  for (const t of trees) {
+    try {
+      const resp = await fetch(`/api/tree/${t.doc_id}`);
+      if (!resp.ok) continue;
+      _families.push({ meta: t, fam: await resp.json() });
+    } catch (e) { /* hoppa över */ }
+  }
+  if (!_families.length) { section.hidden = true; return; }
+
+  section.hidden = false;
+  _selectedIdx = 0;
+  buildPicker();
+  ensureChart();
+  showFamily(0);
+}
+
+function buildPicker() {
+  const picker = document.getElementById("treePicker");
+  picker.innerHTML = _families.map((x, i) => {
+    const s = x.fam.savings || {};
+    return `<div class="is-tree-rowitem" role="row" data-i="${i}" aria-selected="${i === _selectedIdx}">
+      <span class="is-tree-rowitem__name">${escapeHtml(x.meta.name)}</span>
+      <span class="is-tree-rowitem__meta">${x.meta.source_type.toUpperCase()} · ${x.fam.nodes.length} versioner</span>
+      <span class="is-tree-rowitem__saved">−${fmtBytes(s.saved_bytes)}</span>
+    </div>`;
+  }).join("");
+  picker.onclick = (e) => {
+    const row = e.target.closest("[data-i]");
+    if (row) showFamily(Number(row.dataset.i));
+  };
+}
+
+function ensureChart() {
+  if (_treeChart) return;
+  if (typeof echarts === "undefined") return;         // CDN ej laddad
+  _treeChart = echarts.init(document.getElementById("treeChart"));
+  window.addEventListener("resize", () => _treeChart && _treeChart.resize());
+}
+
+function dark() { return document.body.classList.contains("body--dark"); }
+function cssVar(n) { return getComputedStyle(document.body).getPropertyValue(n).trim(); }
+
+// Bygg ECharts-trädet från familjens noder + kanter (DAG -> trädstruktur via föräldrar)
+function toEChartsTree(fam) {
+  const byId = {}; fam.nodes.forEach(n => byId[n.id] = { ...n, children: [] });
+  const childSet = new Set();
+  for (const e of fam.edges) {
+    if (byId[e.parent] && byId[e.child]) {
+      byId[e.parent].children.push(byId[e.child]);
+      childSet.add(e.child);
+    }
+  }
+  const roots = fam.nodes.filter(n => !childSet.has(n.id)).map(n => byId[n.id]);
+  const mk = (n) => {
+    const isNew = n.id === fam.selected;        // kom in i den här körningen
+    const isClicked = n.id === _clickedId;      // vald med klick
+    return {
+      name: shortName(n.name),
+      _id: n.id, _full: n.name, _pages: n.pages, _date: n.date,
+      _selected: isNew,
+      itemStyle: {
+        color: isNew ? cssVar("--green") : cssVar("--primary"),
+        borderColor: isClicked ? cssVar("--accent") : (isNew ? cssVar("--green") : cssVar("--primary")),
+        borderWidth: isClicked ? 5 : (isNew ? 4 : 2),
+        shadowBlur: isClicked ? 22 : (isNew ? 14 : 0),
+        shadowColor: isClicked ? cssVar("--accent") : cssVar("--green"),
+      },
+      symbolSize: isClicked ? 18 : (isNew ? 15 : 11),
+      children: (n.children || []).map(mk),
+    };
+  };
+  return roots.map(mk);
+}
+
+let _clickedId = null;    // nod vald med klick (för markering + popover)
+
+let _orient = "TB";
+
+function showFamily(i) {
+  _selectedIdx = i;
+  const { fam } = _families[i];
+  document.querySelectorAll("#treePicker [data-i]").forEach(el =>
+    el.setAttribute("aria-selected", Number(el.dataset.i) === i));
+
+  ensureChart();
+  if (_treeChart) {
+    const data = toEChartsTree(fam);
+    _treeChart.setOption({
+      tooltip: {
+        trigger: "item", triggerOn: "mousemove",
+        formatter: (p) => {
+          const d = p.data;
+          const e = (fam.edges || []).find(x => x.child === d._id);
+          const change = e ? `${e.relation}: +${e.added} / −${e.removed} sidor`
+                           : (d._selected ? "kom in nu" : "ursprungsversion");
+          return `<b>${escapeHtml(d._full)}</b><br>${d._pages} sidor<br>${(d._date||"").slice(0,10)}<br>${change}`;
+        },
+      },
+      series: [{
+        type: "tree", data,
+        orient: _orient,
+        roam: true,                     // zoom + panorera
+        initialTreeDepth: -1,           // visa alla
+        symbol: "circle",
+        label: { position: _orient === "TB" ? "bottom" : "right",
+                 color: cssVar("--text"), fontSize: 12, distance: 8 },
+        lineStyle: { color: cssVar("--primary"), width: 2, opacity: .5, curveness: .25 },
+        expandAndCollapse: true, animationDuration: 400,
+        top: "6%", left: "8%", right: "8%", bottom: "6%",
+      }],
+    }, true);
+    _treeChart.off("click");
+    _treeChart.on("click", (p) => {
+      if (!p.data || !p.data._id) return;
+      _clickedId = p.data._id;
+      openNodePopover(fam, p.data);
+      showFamily(_selectedIdx);        // rita om -> markerar klickad nod
+    });
+    _treeChart.resize();
+  }
+
+  // besparingar
+  const s = fam.savings || {};
+  document.getElementById("treeSavings").innerHTML =
+    `Sparat <b>${fmtBytes(s.saved_bytes)}</b> (${(s.saved_percent||0).toFixed(1)} % av ${fmtBytes(s.full_bytes)})`;
+
+  // klicka en nod i grafen for info + nedladdning (popover)
+  document.getElementById("treeDl").innerHTML =
+    `<span class="is-field__hint">Klicka på en version i grafen for att se detaljer och ladda ner den.</span>`;
+}
+
+function openNodePopover(fam, d) {
+  const pop = document.getElementById("nodePopover");
+  if (!pop) return;
+  const e = (fam.edges || []).find(x => x.child === d._id);
+  const change = e ? `${e.relation}: +${e.added} / −${e.removed} sidor`
+                   : (d._selected ? "kom in nu" : "ursprungsversion");
+  pop.innerHTML = `
+    <button class="is-pop-close" id="popClose" aria-label="Stäng">×</button>
+    <div class="is-pop-name">${escapeHtml(d._full)}</div>
+    <dl class="is-kv">
+      <dt>Sidor</dt><dd>${fmtNum(d._pages)}</dd>
+      <dt>Datum</dt><dd>${(d._date||"").slice(0,19).replace("T"," ")}</dd>
+      <dt>Ändring</dt><dd>${change}</dd>
+      ${d._selected ? "<dt>Status</dt><dd>Kom in nu</dd>" : ""}
+    </dl>
+    <button class="is-btn is-btn--sm" id="popDl">Ladda ner denna version</button>`;
+  pop.hidden = false;
+  document.getElementById("popClose").onclick = () => { pop.hidden = true; _clickedId = null; showFamily(_selectedIdx); };
+  document.getElementById("popDl").onclick = () => { window.location = `/api/tree/${d._id}/download`; };
+}
+
+function shortName(n) { return n.length > 24 ? n.slice(0, 22) + "…" : n; }
+
+/* verktygsrad: riktning, återställ, helskärm */
+document.getElementById("orientTB").addEventListener("click", () => setOrient("TB"));
+document.getElementById("orientLR").addEventListener("click", () => setOrient("LR"));
+function setOrient(o) {
+  _orient = o;
+  document.getElementById("orientTB").setAttribute("aria-pressed", o === "TB");
+  document.getElementById("orientLR").setAttribute("aria-pressed", o === "LR");
+  if (_families.length) showFamily(_selectedIdx);
+}
+document.getElementById("treeReset").addEventListener("click", () => {
+  if (_families.length) showFamily(_selectedIdx);   // ritar om -> återställer zoom/pan
+});
+document.getElementById("treeFull").addEventListener("click", () => {
+  const card = document.getElementById("treeSection");
+  if (document.fullscreenElement) document.exitFullscreen();
+  else card.requestFullscreen && card.requestFullscreen();
+  setTimeout(() => _treeChart && _treeChart.resize(), 150);
+});
+document.addEventListener("fullscreenchange", () => setTimeout(() => _treeChart && _treeChart.resize(), 150));
+
 /* ---------- Start ---------- */
+async function refreshStore() {
+  const info = document.getElementById("storeInfo");
+  if (!info) return;
+  try {
+    const s = await storeApi("/status");
+    info.textContent = `${fmtNum(s.documents)} dokument · ${fmtNum(s.pages)} sidor · ${fmtNum(s.images)} bilder sparade.`;
+  } catch (e) { info.textContent = "Kunde inte läsa versionslagret."; }
+}
+
+document.getElementById("resetBtn").addEventListener("click", async () => {
+  const ok = await askConfirm({
+    title: "Rensa versionslagret?",
+    text: "Detta raderar alla sparade dokument, sidor och bilder i versionslagret (cachen) permanent. Dina riktiga filer påverkas inte.",
+    ok: "Rensa allt",
+  });
+  if (!ok) return;
+  try {
+    await storeApi("/reset", {});
+    await refreshStore();
+  } catch (e) {
+    resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>Kunde inte rensa</strong>${escapeHtml(e.message)}</div>`;
+  }
+});
+
 (async function init() {
   updateRunLabel();
   try {
@@ -351,4 +574,5 @@ function renderReport(r, roundTrip) {
   } catch (e) {
     resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>Ingen kontakt</strong>${escapeHtml(e.message)}</div>`;
   }
+  refreshStore();
 })();
