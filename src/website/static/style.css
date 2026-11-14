@@ -100,6 +100,19 @@
     display: grid; place-items: center; transition: background-color .15s;
   }
   .is-theme-btn:hover { background: rgba(255,255,255,.12); }
+
+  /* Language switch (EN / SV) next to the theme button */
+  .is-lang {
+    display: inline-flex; border: 1px solid rgba(255,255,255,.14); border-radius: 10px;
+    overflow: hidden; height: 36px; background: rgba(255,255,255,.06);
+  }
+  .is-lang button {
+    appearance: none; border: 0; background: transparent; color: rgba(250,250,250,.65);
+    font: 600 12px/1 inherit; letter-spacing: .04em; padding: 0 10px; cursor: pointer;
+  }
+  .is-lang button:hover { color: #FAFAFA; background: rgba(255,255,255,.08); }
+  .is-lang button[aria-pressed="true"] { color: #FAFAFA; background: rgba(255,255,255,.18); }
+  .is-lang button:focus-visible { outline: none; box-shadow: inset 0 0 0 2px rgba(255,255,255,.55); }
   .is-theme-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(255,255,255,.45); }
 
   /* ---------- Layout ---------- */

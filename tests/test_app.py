@@ -203,8 +203,10 @@ def fake_diarize(monkeypatch):
     diarize = importlib.import_module("transcription.diarize")
     calls = []
 
-    def fake_turns(audio, token, num_speakers=None):
+    def fake_turns(audio, token, num_speakers=None, device="auto", on_device=None):
         calls.append((audio.name, token, num_speakers))
+        if on_device:
+            on_device("cpu", None)
         return [(0.0, 2.5, "SPEAKER_00"), (2.5, 6.0, "SPEAKER_01")]
     monkeypatch.setattr(diarize, "diarize_turns", fake_turns)
     monkeypatch.setattr(diarize, "find_token", lambda: "tok")

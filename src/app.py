@@ -81,9 +81,11 @@ def transcribe_audio(audio: Path, model_name: str, device: str, lang: str | None
         return run("cpu", "int8")
 
 
-def add_speakers(audio: Path, transcript: Path, num_speakers: int | None = None) -> int:
+def add_speakers(audio: Path, transcript: Path, num_speakers: int | None = None,
+                 device: str = "auto") -> int:
     """Put a speaker label on every transcript line (as transcription.diarize writes them).
 
+    device: "auto" uses the GPU when PyTorch can, "cpu" forces the CPU.
     Returns the number of speakers found. Raises RuntimeError if it can't be done.
     """
     from notes.meeting_notes import read_transcript
@@ -93,8 +95,13 @@ def add_speakers(audio: Path, transcript: Path, num_speakers: int | None = None)
     if not token:
         raise RuntimeError("no Hugging Face token: set HF_TOKEN or create .hf_token "
                            "in the project folder")
-    print("      finding who speaks when (pyannote)...")
-    turns = diarize_turns(audio, token, num_speakers)
+    def report(dev: str, hint: str | None) -> None:
+        print(f"      finding who speaks when (pyannote on {dev})...")
+        if hint:
+            print(f"      note: {hint}", file=sys.stderr)
+
+    turns = diarize_turns(audio, token, num_speakers,
+                          device="cpu" if device == "cpu" else "auto", on_device=report)
     lines = [f"[{s.start:7.2f} -> {s.end:7.2f}] {assign_speaker(s.start, s.end, turns)}: "
              f"{s.text}" for s in read_transcript(transcript)]
     transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -161,7 +168,7 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
                                           batched)
             if speakers:
                 try:
-                    found = add_speakers(split.audio_path, transcript, num_speakers)
+                    found = add_speakers(split.audio_path, transcript, num_speakers, device)
                     labelled = True
                     print(f"      {found} speaker{'s' if found != 1 else ''}")
                 except RuntimeError as exc:

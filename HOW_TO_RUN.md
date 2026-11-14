@@ -50,6 +50,18 @@ Rows marked `MISSING` are required. Rows marked `--` are optional:
 Without the optional parts everything still works: the notes are just written without
 a summary, keywords or speaker labels.
 
+### GPU for speaker labels
+
+Transcription uses the GPU on its own, but speaker labels (pyannote) need the CUDA
+build of PyTorch. `python run.py check` tells you which one you have. To switch:
+
+```bash
+pip install --force-reinstall torch torchaudio --index-url https://download.pytorch.org/whl/cu126
+```
+
+This is a ~2.5 GB download. Afterwards `check` shows "speaker labels run on: GPU".
+If the GPU runs out of memory, speaker detection falls back to the CPU by itself.
+
 ## 2. The website (easiest)
 
 ```bash
@@ -63,8 +75,11 @@ Ctrl+C.
 - **Upload page** (`/`): drop videos or a folder, tick summary / keywords / speakers,
   press start, and download the notes. A video that was already processed is returned
   straight away.
-- **Rensa dubbletter** (`/dedupe`): pick a folder and see which PDF / PowerPoint /
+- **Remove duplicates** (`/dedupe`): pick a folder and see which PDF / PowerPoint /
   image files can go without losing a unique slide, and how much space that frees.
+
+The pages are in English. Click **SV** in the header for Swedish (**EN** switches back);
+the browser remembers the choice.
 
 Extra options are passed to the server: `--port`, `--whisper-model`, `--no-summary`,
 `--keywords`, `--speakers`.
