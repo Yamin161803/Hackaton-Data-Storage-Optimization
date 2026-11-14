@@ -108,6 +108,40 @@ def test_embed_images_keeps_no_frame_files(tmp_path, fake_transcribe, resources_
     assert not resources_in_tmp.exists()
 
 
+def test_frames_where_nobody_speaks_are_not_saved(tmp_path, fake_transcribe,
+                                                 resources_in_tmp):
+    # speech only at 0-2 and 3-5 (fake_transcribe); slides change every 2 s after that
+    scenes = [("black", 2), ("white", 4)] + [(c, 2) for c in ("red", "blue", "green", "yellow")]
+    video = make_video(tmp_path / "v.mp4", scenes)
+    text = app.make_notes(video, tmp_path / "v.md", summary=False, max_silent_frames=2,
+                          min_words=1).read_text(encoding="utf-8")
+    frames = sorted(p.name for p in (resources_in_tmp / "v").iterdir())
+    assert frames == ["frame_00h00m00.000s.jpg", "frame_00h00m02.000s.jpg"]
+    assert all(name in text for name in frames) and text.count("![") == 2
+
+
+def test_keep_silent_frames(tmp_path, fake_transcribe, resources_in_tmp):
+    scenes = [("black", 2), ("white", 4)] + [(c, 2) for c in ("red", "blue", "green", "yellow")]
+    video = make_video(tmp_path / "v.mp4", scenes)
+    app.make_notes(video, tmp_path / "v.md", summary=False, max_silent_frames=None)
+    assert len(list((resources_in_tmp / "v").iterdir())) == 6
+
+
+def test_main_silent_frame_options(tmp_path, monkeypatch):
+    seen = []
+
+    def fake_make_notes(video, output, **kwargs):
+        seen.append(kwargs["max_silent_frames"])
+        output.write_text("x")
+        return output
+    monkeypatch.setattr(app, "make_notes", fake_make_notes)
+    out = ["-o", str(tmp_path / "n.md")]
+    assert app.main(["v.mp4", *out]) == 0
+    assert app.main(["v.mp4", *out, "--max-silent-frames", "5"]) == 0
+    assert app.main(["v.mp4", *out, "--keep-silent-frames"]) == 0
+    assert seen == [app.MAX_SILENT_FRAMES, 5, None]
+
+
 def test_custom_resources_folder(tmp_path, fake_transcribe):
     video = make_video(tmp_path / "v.mp4", [("black", 2)])
     app.make_notes(video, tmp_path / "v.md", summary=False, resources_dir=tmp_path / "imgs")

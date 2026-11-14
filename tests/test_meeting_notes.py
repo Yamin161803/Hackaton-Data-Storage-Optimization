@@ -5,7 +5,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from notes.meeting_notes import build_notes, hms, read_transcript  # noqa: E402
+from notes.meeting_notes import (Section, Segment, assign, build_notes,  # noqa: E402
+                                 drop_silent_runs, hms, read_transcript)
 
 
 def make_split_dir(root: Path, frame_times, transcript: str) -> Path:
@@ -303,3 +304,152 @@ def test_clean_keywords():
     assert clean_keywords(['"JVM",', "jvm", "  ", "Native   Image", "#tag"], limit=10) == [
         "JVM", "Native Image", "tag"]
     assert clean_keywords([f"k{i}" for i in range(20)], limit=3) == ["k0", "k1", "k2"]
+
+
+# ---------- leaving out frames where nobody speaks ----------
+
+def _sections(*times):
+    return [Section(float(t), Path(f"f{t}.jpg")) for t in times]
+
+
+def _kept(sections, segments, max_silent, min_words=1, video_end=None):
+    """min_words=1: only frames with no text at all count as silent."""
+    assign(sections, segments)
+    kept, dropped = drop_silent_runs(sections, max_silent, min_words, video_end=video_end)
+    return [s.seconds for s in kept], [s.seconds for s in dropped]
+
+
+def test_long_silent_run_is_dropped():
+    # speech 0-5 and 60-70; frames 10..50 are on screen while nobody speaks
+    segs = [Segment(0, 5, "a"), Segment(60, 70, "b")]
+    kept, dropped = _kept(_sections(0, 10, 20, 30, 40, 50, 60), segs, 3)
+    assert kept == [0, 60]
+    assert dropped == [10, 20, 30, 40, 50]
+
+
+def test_short_silent_run_is_kept():
+    segs = [Segment(0, 5, "a"), Segment(40, 50, "b")]
+    kept, dropped = _kept(_sections(0, 10, 20, 30, 40), segs, 3)
+    assert kept == [0, 10, 20, 30, 40] and dropped == []
+
+
+def test_run_of_exactly_max_is_kept_one_more_is_dropped():
+    segs = [Segment(0, 5, "a"), Segment(40, 45, "b")]
+    assert _kept(_sections(0, 10, 20, 30, 40), segs, 3)[1] == []
+    assert _kept(_sections(0, 10, 20, 30, 40), segs, 2)[1] == [10, 20, 30]
+
+
+def test_frames_during_one_long_segment_get_no_text_and_are_dropped():
+    # whisper's one 85 s segment over music: its text goes under one frame only, so
+    # the frames flashing by meanwhile all show "(no speech)"
+    segs = [Segment(0, 85, "Gud."), Segment(90, 95, "Thank you.")]
+    times = [0, 2, 4, 6, 8, 10, 90]
+    kept, dropped = _kept(_sections(*times), segs, 3)
+    # the text sits under frame 10 (on screen longest), so that one stays
+    assert kept == [10, 90] and dropped == [0, 2, 4, 6, 8]
+
+
+def test_burst_of_frames_during_a_sentence_keeps_the_frame_with_the_text():
+    segs = [Segment(0.0, 5.0, "One sentence while the slide animates.")]
+    sections = _sections(0, 0.5, 1, 1.5, 2, 2.5)
+    assign(sections, segs)
+    kept, dropped = drop_silent_runs(sections, 3, min_words=1)
+    assert [s.seconds for s in kept] == [2.5] and kept[0].segments == segs
+    assert len(dropped) == 5
+
+
+def test_silent_run_at_the_end_is_dropped():
+    segs = [Segment(0, 5, "a")]
+    assert _kept(_sections(0, 10, 20), segs, 1) == ([0], [10, 20])
+
+
+def test_no_speech_at_all_keeps_every_frame():
+    # e.g. a video without an audio track
+    assert _kept(_sections(0, 10, 20, 30), [], 0) == ([0, 10, 20, 30], [])
+
+
+def test_max_silent_zero_drops_every_silent_frame():
+    segs = [Segment(0, 5, "a"), Segment(20, 25, "b")]
+    assert _kept(_sections(0, 10, 20), segs, 0) == ([0, 20], [10])
+
+
+def test_build_notes_leaves_out_silent_frames(tmp_path):
+    # frames at 0, 21, 22, 23, 24 and 30: 21-29 has no speech (TRANSCRIPT)
+    split = make_split_dir(tmp_path, [0, 10, 21, 22, 23, 24, 30], TRANSCRIPT)
+    md = build_notes(split, max_silent_frames=3, min_words=1).read_text(encoding="utf-8")
+    assert "frame_1.jpg" in md and "frame_2.jpg" in md and "frame_7.jpg" in md
+    for n in (3, 4, 5, 6):
+        assert f"frame_{n}.jpg" not in md
+    assert md.count("## ") == 3
+    assert "Last words." in md.split("## 3.")[1]
+
+
+def test_build_notes_keeps_every_frame_by_default(tmp_path):
+    split = make_split_dir(tmp_path, [0, 10, 21, 22, 23, 24, 30], TRANSCRIPT)
+    md = build_notes(split).read_text(encoding="utf-8")
+    assert all(f"frame_{n}.jpg" in md for n in range(1, 8))
+
+
+# ---------- frames with only a few words ----------
+
+def _words(n):
+    return " ".join(["word"] * n)
+
+
+def test_brief_frames_with_few_words_are_dropped_and_their_text_moves_back():
+    # presenter moves windows around (frames 10-13, 1 s each) saying a few words
+    segs = [Segment(0, 9, _words(20)), Segment(10.1, 10.9, "okay"),
+            Segment(11.1, 11.9, "let me just"), Segment(12.1, 12.9, "move this"),
+            Segment(13.1, 13.9, "there"), Segment(14, 30, _words(30))]
+    sections = _sections(0, 10, 11, 12, 13, 14)
+    assign(sections, segs)
+    kept, dropped = drop_silent_runs(sections, 3, min_words=10, video_end=30)
+    assert [s.seconds for s in kept] == [0, 14]
+    assert [s.seconds for s in dropped] == [10, 11, 12, 13]
+    # nothing that was said is lost: it sits under the previous kept frame, in order
+    assert [seg.text for seg in kept[0].segments] == [
+        _words(20), "okay", "let me just", "move this", "there"]
+    assert all(not s.segments for s in dropped)
+
+
+def test_few_words_on_a_frame_shown_long_is_kept():
+    # a slide on screen for 40 s while someone says only "any questions?"
+    segs = [Segment(0, 9, _words(20)), Segment(10, 12, "any questions?"),
+            Segment(50, 60, _words(20))]
+    times = [0, 10, 50]
+    assert _kept(_sections(*times), segs, 0, min_words=10, video_end=60) == ([0, 10, 50], [])
+
+
+def test_frame_with_no_words_is_dropped_however_long_it_shows():
+    segs = [Segment(0, 9, _words(20)), Segment(50, 60, _words(20))]
+    assert _kept(_sections(0, 10, 50), segs, 0, min_words=10, video_end=60) == ([0, 50], [10])
+
+
+def test_short_run_of_few_word_frames_is_kept():
+    segs = [Segment(0, 9, _words(20)), Segment(10, 11, "okay"), Segment(12, 30, _words(20))]
+    assert _kept(_sections(0, 10, 12), segs, 3, min_words=10, video_end=30)[1] == []
+
+
+def test_dropped_text_at_the_start_moves_to_the_first_kept_frame():
+    segs = [Segment(0, 0.5, "hi"), Segment(1, 1.5, "so"), Segment(2, 20, _words(20))]
+    sections = _sections(0, 1, 2)
+    assign(sections, segs)
+    kept, _ = drop_silent_runs(sections, 1, min_words=10, video_end=20)
+    assert [s.seconds for s in kept] == [2]
+    assert [seg.text for seg in kept[0].segments] == ["hi", "so", _words(20)]
+
+
+def test_build_notes_min_words(tmp_path):
+    # frames at 10, 11, 12 have 2-3 words each and show 1 s: dropped with min_words=10,
+    # kept with min_words=1; their words appear in the notes either way
+    transcript = ("[   0.00 ->    9.00] " + _words(20) + "\n"
+                  "[  10.10 ->   10.90] okay then\n"
+                  "[  11.10 ->   11.90] one moment\n"
+                  "[  12.10 ->   12.90] here it is\n"
+                  "[  13.00 ->   30.00] " + _words(25) + "\n")
+    split = make_split_dir(tmp_path, [0, 10, 11, 12, 13], transcript)
+    md = build_notes(split, max_silent_frames=2).read_text(encoding="utf-8")
+    assert md.count("![") == 2 and "frame_1.jpg" in md and "frame_5.jpg" in md
+    assert "okay then" in md and "one moment" in md and "here it is" in md
+    md = build_notes(split, max_silent_frames=2, min_words=1).read_text(encoding="utf-8")
+    assert md.count("![") == 5
