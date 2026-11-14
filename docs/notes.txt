@@ -24,6 +24,8 @@ Man ska kunna skanna en ny video, jämföra den med alla andra videor vi sparat,
 
 För videor:
  * Hasha videon, få sträng av bokstäver, använd hash som nyckelvärde när vi lagrar videon
+ * Sampla videon
+ * Future works: lägg till AI based keyframe extraction
 
 Kan vara bra att skriva ner vilka som deltagit i gruppmöten.
  * Kanske går att göra automatiskt
@@ -38,5 +40,7 @@ pdf 100 -> hash -> hash är unik i listan av filer -> spara i listan
 Complete duplicate: hash is equal, delete
 
 Overlap threshold 
+
+
 
 
