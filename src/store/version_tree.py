@@ -176,3 +176,38 @@ def family_with_savings(store: Store, doc_id: int) -> dict:
     # node ids are stringified for JS safety; savings SQL needs the ints back
     fam["savings"] = savings(store, [int(n["id"]) for n in fam["nodes"]])
     return fam
+
+
+def all_families(store: Store) -> list[dict]:
+    """Every version family in the store, one entry per family (connected component).
+
+    Returns [{root, name, source_type, size, saved_bytes, saved_percent}], sorted
+    with multi-version families first (largest first). A single unrelated document
+    is a family of size 1. Used by the /versions page's left-hand table.
+    """
+    rows = store.conn.execute(
+        "SELECT id, source_type, source_name, title, created_at FROM document"
+    ).fetchall()
+    seen: set[int] = set()
+    out = []
+    for r in rows:
+        if r["id"] in seen:
+            continue
+        fam = version_family(store, r["id"])
+        if not fam:
+            continue
+        ids = [int(n["id"]) for n in fam["nodes"]]
+        seen.update(ids)
+        sv = savings(store, ids)
+        # the family's display name = the oldest (root) node's name
+        root_node = fam["nodes"][0] if fam["nodes"] else None
+        out.append({
+            "root": fam["root"],
+            "name": root_node["name"] if root_node else (r["source_name"] or f"doc {r['id']}"),
+            "source_type": fam["source_type"],
+            "size": len(fam["nodes"]),
+            "saved_bytes": sv["saved_bytes"],
+            "saved_percent": sv["saved_percent"],
+        })
+    out.sort(key=lambda f: (-f["size"], -f["saved_bytes"]))
+    return out

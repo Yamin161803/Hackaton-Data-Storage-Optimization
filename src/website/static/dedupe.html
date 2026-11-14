@@ -8,7 +8,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 </head>
 <body>
 
@@ -33,6 +32,7 @@
     <span class="is-header-chip" id="apiChip">Backend: <span class="is-mono"></span></span>
     <div class="is-lang" role="group" data-i18n-attr="aria-label:lang_aria">
       <button type="button" data-lang="en" lang="en" aria-pressed="true">EN</button>
+      <button type="button" data-lang="sv" lang="sv" aria-pressed="false">SV</button>
     </div>
     <button class="is-theme-btn" id="themeBtn" type="button" data-i18n-attr="aria-label:theme_aria">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
@@ -125,6 +125,19 @@
       </div>
     </section>
 
+    <!-- Versions: compact list under Folders (left column) -->
+    <section class="is-card anim anim-2" id="treeSection" aria-labelledby="treeTitle" hidden>
+      <h2 class="is-section-title" id="treeTitle">
+        <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 22v-6M5 9l3 3M19 9l-3 3M4 20h16"/></svg></span>
+        Versions
+      </h2>
+      <p class="is-field__hint">New versions of stored files were found. Click one to open the version graph.</p>
+      <div class="is-tree-list" id="treeList"></div>
+      <div class="is-actions">
+        <a class="is-btn is-btn--ghost is-btn--sm" href="/versions" id="allVersionsLink">Open version graph</a>
+      </div>
+    </section>
+
     <!-- Results -->
     <section class="is-card is-lift anim anim-3" aria-labelledby="resultTitle" aria-live="polite">
       <h2 class="is-section-title" id="resultTitle">
@@ -136,34 +149,6 @@
       </div>
     </section>
   </div>
-
-  <!-- Versions: full width below the grid, so it never lands beside Folders -->
-  <section class="is-card is-graph-card anim anim-3" id="treeSection" aria-labelledby="treeTitle" hidden>
-    <div class="is-graph-toolbar">
-      <h2 class="is-section-title" id="treeTitle">
-        <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6M12 22v-6M5 9l3 3M19 9l-3 3M4 20h16"/></svg></span>
-        Versions
-      </h2>
-      <div class="is-graph-controls">
-        <div class="is-seg" role="group" aria-label="Direction">
-          <button type="button" id="orientTB" aria-pressed="true">Vertical</button>
-          <button type="button" id="orientLR" aria-pressed="false">Horizontal</button>
-        </div>
-        <button class="is-btn is-btn--ghost is-btn--sm" id="treeReset" type="button" title="Reset view">Reset</button>
-        <button class="is-btn is-btn--ghost is-btn--sm" id="treeFull" type="button" title="Fullscreen (Esc to exit)">Fullscreen</button>
-      </div>
-    </div>
-    <p class="is-field__hint" id="treeHint">Choose a file in the table to see its version tree. Drag to pan, scroll to zoom.</p>
-    <div class="is-tree-layout">
-      <div class="is-tree-picker" id="treePicker" role="table" aria-label="Versionsfamiljer"></div>
-      <div class="is-graph-surface">
-        <div id="treeChart" class="is-graph-chart"></div>
-        <div class="is-tree-savings" id="treeSavings"></div>
-        <div class="is-node-popover" id="nodePopover" hidden></div>
-      </div>
-    </div>
-    <div class="is-tree-dl" id="treeDl"></div>
-  </section>
 </main>
 
 <!-- Confirm deletion -->

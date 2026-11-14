@@ -1,3 +1,5 @@
+
+
 """
 slide_dedupe.py
 
@@ -163,6 +165,11 @@ NOTES
   Visually identical images with different encodings may therefore
   produce different hashes. The same goes for image files: a PNG and a JPG
   of the same picture, or a resized copy, are different images.
+- PDF text extraction runs on pypdf with output-identical speed-ups (a faster
+  content-stream parser plus per-file font and form caches, see "pypdf
+  speed-ups" below). They give the same text, slide hashes and errors as plain
+  pypdf, and are used only with pypdf 6.x. Set SLIDE_DEDUPE_PYPDF_SPEEDUPS=0 to
+  turn them off.
 - The prefilter only catches byte-identical files. A re-saved or
   re-exported copy is still caught, just later, by the slide comparison.
 """
@@ -295,30 +302,358 @@ def _raw_pdf_images(page) -> list[bytes]:
     return out
 
 
+# --------------------------------------------------------------------------
+# pypdf speed-ups for text extraction (output-identical)
+# --------------------------------------------------------------------------
+#
+# Profiling page.extract_text() on real slide decks (Keynote, PowerPoint,
+# LibreOffice and LaTeX/beamer exports) shows these hotspots:
+#
+#   1. ContentStream._parse_content_stream, about 60% of extract_text: pypdf
+#      tokenizes each content stream one byte at a time (BytesIO.read(1) /
+#      seek(-1)). We replace it with a regex tokenizer that builds the same
+#      operations list, using the same pypdf object types, constructors and
+#      parsing-budget accounting.
+#   2. Repeated parsing: form XObjects shared by many pages (slide
+#      backgrounds, master elements) are parsed again on every page. When the
+#      same stream turns up a second time in a file, its parsed operations are
+#      cached for the rest of that file.
+#   3. Font.from_font_resource, about 10%: pypdf rebuilds every font, including
+#      parsing its /ToUnicode CMap, on every page, although a deck reuses the
+#      same few font objects on all pages. We cache it per file.
+#   4. is_char_neutral / is_char_rtl, a few %: called for every character
+#      shown, with a cache that only lasts one call. Memoized (pure functions).
+#
+# Safety: the tokenizer handles only the plain, common token forms itself.
+# Less common objects (strings with escapes or nested parentheses, hex strings
+# containing whitespace, names with '#' or non-ASCII bytes, non-trivial
+# dictionaries, booleans) are read by pypdf's own read_object at the same
+# position. When something is unusual for the whole stream (inline images,
+# comments, very long tokens, deep nesting, a limit being hit, or any
+# exception), the fast result is thrown away and pypdf's original parser runs.
+# That keeps the result exactly what pypdf would produce, errors such as
+# LimitReachedError included. The speed-ups only turn on for pypdf 6.x, the
+# version they were checked against.
+#
+# Set SLIDE_DEDUPE_PYPDF_SPEEDUPS=0 to run plain pypdf, for example to compare results or timings.
+PYPDF_SPEEDUPS = os.environ.get("SLIDE_DEDUPE_PYPDF_SPEEDUPS", "1") != "0"
+
+_WS = rb"[\x00\t\n\f\r ]*"              # pypdf WHITESPACES (top level, dictionaries)
+_WS_ARRAY = rb"[\x00\t\n\x0b\f\r ]*"    # isspace() or WHITESPACES (inside arrays)
+# Plain name: printable ASCII up to the next delimiter (no backtracking possible).
+_NAME = rb"/[!-$&-'*-.0-;=?-Z\\^-z|~]*(?=[\s()<>\[\]{}/%]|\Z)"
+_NUM = rb"[0-9+\-.][+,\-.0-9]*"   # NumberObject.NumberPattern quirk: '+-.' is a range that includes ','
+_TOKENS = (
+    rb"(?:(?P<num>" + _NUM + rb")"
+    rb"|(?P<name>" + _NAME + rb")"
+    rb"|(?P<str>\([^()\\]*\))"
+    rb"|(?P<hex><[0-9A-Fa-f]*>)"
+    rb"|(?P<dict><<)"
+    rb"|(?P<op>[A-Za-z'\"][^\s()<>\[\]{}/%]*)"
+    rb"|(?P<open>\[)"
+    rb"|(?P<close>\])"
+    rb"|(?P<comment>%)"
+    rb"|(?P<eof>\Z)"
+    rb"|(?P<other>.))"
+)
+_FAST_TOP = re.compile(_WS + _TOKENS, re.S)
+_FAST_ARRAY = re.compile(_WS_ARRAY + _TOKENS, re.S)
+# One "/Key value" entry of a plain dictionary such as << /MCID 3 >> (marked content).
+_FAST_DICT_ENTRY = re.compile(
+    _WS + rb"(?:(?P<key>" + _NAME + rb")" + _WS
+    + rb"(?:(?P<num>" + _NUM + rb")|(?P<name>" + _NAME + rb")|(?P<str>\([^()\\]*\))|(?P<hex><[0-9A-Fa-f]*>))"
+    + rb"|(?P<end>>>))", re.S)
+_FAST_STREAM_KEYWORD = re.compile(_WS + rb"stream")
+# The most common operation: plain numbers then an operator, e.g. "1 0 0 1 72 720 cm",
+# "10 20 m" or "Q". Each number is followed by whitespace, so the match cannot split
+# one number into two; the operator is read up to the next delimiter, as pypdf does.
+_FAST_NUMBER_OP = re.compile(
+    _WS + rb"((?:" + _NUM + rb"[\t\n\f\r ]+)*)([A-Za-z'\"][^\s()<>\[\]{}/%]*)")
+_MAYBE_INDIRECT = re.compile(rb"\sR[^a-zA-Z]")  # cheap pre-check for "12 0 R"
+_NUMBER_PEEK = 20        # read_object peeks 20 bytes for numbers / indirect references
+_MAX_FAST_OPERATOR = 64  # pypdf limit is 128 (approximate, chunked): stay well below
+_MAX_FAST_NAME = 1024    # pypdf limit is 4096
+_MAX_FAST_NESTING = 32   # deeper arrays: let pypdf decide (it may hit RecursionError)
+_MAX_FAST_DICT = 256     # entries; pypdf limit is far higher
+
+
+class _FastParseFallback(Exception):
+    """Internal: let pypdf's original parser handle this stream."""
+
+
+_pypdf_speedups: dict | None = None   # originals, once installed
+_file_cache: dict | None = None       # per-file caches while _pypdf_file_cache() is active
+
+
+def _install_pypdf_speedups() -> bool:
+    """Patch pypdf once per process. Returns False if disabled or this pypdf is not supported."""
+    global _pypdf_speedups
+    if _pypdf_speedups is not None:
+        return bool(_pypdf_speedups)
+    _pypdf_speedups = {}
+    if not PYPDF_SPEEDUPS:
+        return False
+    try:
+        import pypdf
+        from pypdf._configuration import get_configuration
+        from pypdf.generic import (ArrayObject, ByteStringObject, DictionaryObject, FloatObject,
+                                   NameObject, NumberObject)
+        from pypdf.generic import _data_structures as ds
+        from pypdf.generic._font import Font
+        from pypdf.generic._utils import StreamParsingBudget, create_string_object
+        if int(pypdf.__version__.split(".")[0]) != 6:
+            return False
+        original_parse = ds.ContentStream._parse_content_stream
+        original_font = Font.from_font_resource.__func__
+        indirect, read_object = ds.IndirectPattern, ds.read_object
+    except Exception:  # unknown pypdf internals: leave pypdf untouched
+        return False
+
+    top_match, array_match, number_op = _FAST_TOP.match, _FAST_ARRAY.match, _FAST_NUMBER_OP.match
+    entry_match, stream_keyword = _FAST_DICT_ENTRY.match, _FAST_STREAM_KEYWORD.match
+    new_float, new_int = float.__new__, int.__new__
+
+    def fast_ops(data: bytes, enc):
+        """The operations list pypdf would build for `data`, or raise _FastParseFallback."""
+        config = get_configuration()
+        budget = StreamParsingBudget(remaining_budget=config.stream_parsing_work_maximum_count)
+        max_elements = config.array_maximum_element_count
+        bytes_mode = enc == "bytes"
+        # "12 0 R" in a content stream makes pypdf fail (no reader there); check per number only if present.
+        check_indirect = _MAYBE_INDIRECT.search(data) is not None and indirect.search(data) is not None
+        bio = None
+
+        def number(m, group="num"):
+            s = m.group(group)
+            if len(s) >= _NUMBER_PEEK - 1 or (
+                    check_indirect and indirect.match(data, m.start(group), m.start(group) + _NUMBER_PEEK)):
+                raise _FastParseFallback
+            if b"." in s:
+                try:
+                    return new_float(FloatObject, float(s))
+                except ValueError:
+                    return FloatObject(s)   # pypdf logs a warning and uses 0.0
+            try:
+                return new_int(NumberObject, int(s))
+            except ValueError:
+                return NumberObject(s)      # pypdf logs a warning and uses 0
+
+        def string(m, group):
+            s = data[m.start(group) + 1:m.end(group) - 1]
+            if group == "hex":
+                s = bytes.fromhex((s + b"0" if len(s) % 2 else s).decode())
+            return ByteStringObject(s) if bytes_mode else create_string_object(s, enc)
+
+        def name(m, group="name"):
+            s = m.group(group)
+            if len(s) > _MAX_FAST_NAME or b"#" in s:
+                return None
+            return NameObject(s.decode())
+
+        def delegate(start):
+            nonlocal bio
+            if bio is None:
+                from io import BytesIO
+                bio = BytesIO(data)
+            bio.seek(start)
+            obj = read_object(bio, None, enc, parsing_budget=budget)
+            return obj, bio.tell()
+
+        def read_dict(start):
+            items, pos = {}, start + 2
+            while True:
+                m = entry_match(data, pos)
+                if m is None or len(items) >= _MAX_FAST_DICT:
+                    return delegate(start)     # not a plain dictionary
+                pos = m.end()
+                if m.lastgroup == "end":
+                    break
+                key = name(m, "key")
+                kind = m.lastgroup
+                value = (number(m, kind) if kind == "num" else name(m, kind) if kind == "name"
+                         else string(m, kind))
+                if key is None or value is None or key in items:
+                    return delegate(start)
+                items[key] = value
+                budget.remaining_budget -= 2
+            if stream_keyword(data, pos):
+                raise _FastParseFallback       # "<< >> stream": leave to pypdf
+            d = DictionaryObject()
+            d.update(items)
+            return d, pos
+
+        def read_array(pos, depth):
+            if depth > _MAX_FAST_NESTING:
+                raise _FastParseFallback
+            arr, remaining = ArrayObject(), max_elements
+            while True:
+                m = array_match(data, pos)
+                kind = m.lastgroup
+                if kind == "close" or kind == "eof":
+                    return arr, m.end()
+                remaining -= 1
+                budget.remaining_budget -= 1
+                if remaining < 0 or kind == "comment" or data[m.start(kind):m.start(kind) + 1] == b"n":
+                    raise _FastParseFallback   # limit / comment / null shortcut: rare, leave to pypdf
+                pos = m.end()
+                if kind == "str" or kind == "hex":
+                    arr.append(string(m, kind))
+                elif kind == "num":
+                    arr.append(number(m))
+                elif kind == "open":
+                    sub, pos = read_array(pos, depth + 1)
+                    arr.append(sub)
+                elif kind == "name" and (obj := name(m)) is not None:
+                    arr.append(obj)
+                elif kind == "dict":
+                    obj, pos = read_dict(m.start(kind))
+                    arr.append(obj)
+                else:                          # booleans, complex strings/names, ...
+                    obj, pos = delegate(m.start(kind))
+                    arr.append(obj)
+
+        def number_run(parts):
+            if max(map(len, parts)) >= _NUMBER_PEEK - 1:
+                raise _FastParseFallback
+            try:
+                return [new_float(FloatObject, float(s)) if b"." in s else new_int(NumberObject, int(s))
+                        for s in parts]
+            except ValueError:  # e.g. "1.2.3" or "-": pypdf logs a warning and uses 0
+                return [FloatObject(s) if b"." in s else NumberObject(s) for s in parts]
+
+        ops, operands, pos = [], [], 0
+        while True:
+            if not check_indirect and (m := number_op(data, pos)) is not None:
+                nums, op = m.groups()
+                if op == b"BI" or len(op) > _MAX_FAST_OPERATOR:
+                    raise _FastParseFallback   # inline image / suspicious operator
+                if nums:
+                    parts = nums.split()
+                    budget.remaining_budget -= len(parts)
+                    operands.extend(number_run(parts))
+                budget.remaining_budget -= 1
+                ops.append((operands, op))
+                operands = []
+                pos = m.end()
+                continue
+            m = top_match(data, pos)
+            kind = m.lastgroup
+            if kind == "eof":
+                break
+            pos = m.end()
+            budget.remaining_budget -= 1
+            if kind == "op":
+                op = m.group(kind)
+                if op == b"BI" or len(op) > _MAX_FAST_OPERATOR:
+                    raise _FastParseFallback   # inline image / suspicious operator
+                ops.append((operands, op))
+                operands = []
+            elif kind == "num":
+                operands.append(number(m))
+            elif kind == "name" and (obj := name(m)) is not None:
+                operands.append(obj)
+            elif kind == "open":
+                obj, pos = read_array(pos, 1)
+                operands.append(obj)
+            elif kind == "str" or kind == "hex":
+                operands.append(string(m, kind))
+            elif kind == "dict":
+                obj, pos = read_dict(m.start(kind))
+                operands.append(obj)
+            elif kind == "comment" or kind == "close":
+                raise _FastParseFallback
+            else:                              # complex strings/names, ...: pypdf's own reader
+                obj, pos = delegate(m.start(kind))
+                operands.append(obj)
+        if budget.remaining_budget < 0:
+            raise _FastParseFallback           # pypdf raises LimitReachedError here
+        return ops
+
+    def fast_parse(self, stream):
+        try:
+            data = stream.getvalue()
+        except AttributeError:
+            return original_parse(self, stream)
+        cache = _file_cache
+        key = (data, self.forced_encoding if isinstance(self.forced_encoding, (str, type(None))) else id(self))
+        if cache is not None and key in cache["ops"]:
+            self._operations = [(list(operands), op) for operands, op in cache["ops"][key]]
+            return None
+        try:
+            ops = fast_ops(data, self.forced_encoding)
+        except Exception:      # _FastParseFallback, a limit, a malformed stream, ...
+            self._operations = []
+            return original_parse(self, stream)
+        self._operations = ops
+        if cache is not None:
+            # Cache streams seen twice in this file (shared form XObjects), not every page.
+            seen = (hashlib.sha1(data).digest(), key[1])   # don't keep every page's bytes alive
+            if seen in cache["seen"]:
+                cache["ops"][key] = [(list(operands), op) for operands, op in ops]
+            else:
+                cache["seen"].add(seen)
+        return None
+
+    def cached_font(cls, pdf_font_dict):
+        cache = _file_cache
+        if cache is None:
+            return original_font(cls, pdf_font_dict)
+        hit = cache["fonts"].get(id(pdf_font_dict))
+        if hit is not None and hit[0] is pdf_font_dict:
+            return hit[1]
+        font = original_font(cls, pdf_font_dict)
+        cache["fonts"][id(pdf_font_dict)] = (pdf_font_dict, font)  # holds the dict: ids stay unique
+        return font
+
+    ds.ContentStream._parse_content_stream = fast_parse
+    Font.from_font_resource = classmethod(cached_font)
+    # get_display_str classifies every character it shows, and its own caches only
+    # last one call. Both checks are pure functions of their arguments.
+    import functools
+    from pypdf import _text_extraction as te
+    te.is_char_neutral = functools.lru_cache(maxsize=65536)(te.is_char_neutral)
+    te.is_char_rtl = functools.lru_cache(maxsize=65536)(te.is_char_rtl)
+    _pypdf_speedups.update(parse=original_parse, font=original_font, fast_ops=fast_ops)
+    return True
+
+
+@contextmanager
+def _pypdf_file_cache():
+    """Per-file caches: fonts shared by the pages, streams parsed more than once."""
+    global _file_cache
+    previous, _file_cache = _file_cache, {"fonts": {}, "ops": {}, "seen": set()}
+    try:
+        yield
+    finally:
+        _file_cache = previous
+
+
 def pdf_slides(path: Path, use_images: bool = True, stats: Stats | None = None,
                fast_images: bool = False):
     """Yield (text, [image_hash, ...]) for each page of a PDF."""
     stats = stats or Stats()
     with stats.phase("pdf.open"):
         from pypdf import PdfReader
+        _install_pypdf_speedups()
         reader = PdfReader(str(path))
         pages = reader.pages
-    for page in pages:
-        with stats.phase("pdf.text"):
-            text = page.extract_text() or ""
-        images = []
-        if use_images:
-            with stats.phase("pdf.images.fast" if fast_images else "pdf.images"):
-                try:
-                    if fast_images:
-                        blobs = _raw_pdf_images(page)
-                    else:
-                        blobs = [img.data for img in page.images]  # decodes + re-encodes
-                    images = [sha256(b) for b in blobs]
-                    stats.bytes["pdf.images.fast" if fast_images else "pdf.images"] += sum(map(len, blobs))
-                except Exception:  # broken/unsupported image stream: fall back to text
-                    images = []
-        yield text, images
+    with _pypdf_file_cache():
+        for page in pages:
+            with stats.phase("pdf.text"):
+                text = page.extract_text() or ""
+            images = []
+            if use_images:
+                with stats.phase("pdf.images.fast" if fast_images else "pdf.images"):
+                    try:
+                        if fast_images:
+                            blobs = _raw_pdf_images(page)
+                        else:
+                            blobs = [img.data for img in page.images]  # decodes + re-encodes
+                        images = [sha256(b) for b in blobs]
+                        stats.bytes["pdf.images.fast" if fast_images else "pdf.images"] += sum(map(len, blobs))
+                    except Exception:  # broken/unsupported image stream: fall back to text
+                        images = []
+            yield text, images
 
 
 def _iter_shapes(shapes):

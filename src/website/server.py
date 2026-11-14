@@ -276,15 +276,15 @@ def dedupe_sida():
     return send_from_directory(STATIC_DIR, "dedupe.html")
 
 
-@app.route("/tree")
-def tree_sida():
-    return send_from_directory(STATIC_DIR, "tree.html")
+@app.route("/versions")
+def versions_sida():
+    return send_from_directory(STATIC_DIR, "versions.html")
 
 
 @app.route("/<path:namn>")
 def statiska_filer(namn):
     if namn in ("index.html", "style.css", "function.js", "dedupe.html", "dedupe.js",
-                "i18n.js"):
+                "i18n.js", "versions.html", "versions.js"):
         return send_from_directory(STATIC_DIR, namn)
     return jsonify(detail=msg("not_found")), 404
 

@@ -21,7 +21,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, send_file
 
 from store import Store
-from store.version_tree import family_with_savings
+from store.version_tree import family_with_savings, all_families
 from store.regenerate import regenerate
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -33,6 +33,20 @@ bp = Blueprint("version_tree", __name__)
 
 def _store() -> Store:
     return Store(DB_PATH, objects_dir=OBJECTS_DIR)
+
+
+@bp.route("/api/tree/families")
+def list_families():
+    """Every version family in the store (for the /versions page's left table)."""
+    s = _store()
+    try:
+        fams = all_families(s)
+    finally:
+        s.close()
+    # stringify root ids for JS 64-bit safety
+    for f in fams:
+        f["root"] = str(f["root"])
+    return jsonify(families=fams)
 
 
 @bp.route("/api/tree/documents")

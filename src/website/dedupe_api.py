@@ -251,7 +251,7 @@ def _kor_rensning(target: Path, trash: Path | None, radera: bool, mode: str,
     # Ingest PDF/PPTX into the persistent corpus store so version families build
     # up across runs (the store is the cache). Collect any file that is a new
     # version belonging to a family (>1 node) so the page can show its tree.
-    report["version_trees"], report["images"] = _ingest_into_store(filer)
+    report["version_trees"], report["images"], report["slides_count"] = _ingest_into_store(filer)
 
     raderat = None
     if radera and trash is not None and trash.is_dir():
@@ -268,7 +268,7 @@ def _kor_rensning(target: Path, trash: Path | None, radera: bool, mode: str,
     return report
 
 
-def _ingest_into_store(files: list[Path]) -> tuple[list[dict], dict]:
+def _ingest_into_store(files: list[Path]) -> tuple[list[dict], dict, dict]:
     """Ingest PDF/PPTX files into the corpus store (the cache).
 
     Returns (trees, images) where:
@@ -311,10 +311,15 @@ def _ingest_into_store(files: list[Path]) -> tuple[list[dict], dict]:
             })
         total_images = store.conn.execute("SELECT COUNT(*) FROM page_image").fetchone()[0]
         unique_images = store.conn.execute("SELECT COUNT(*) FROM image").fetchone()[0]
-        images = {"total": total_images, "unique": unique_images}
+        total_slides = store.conn.execute("SELECT COUNT(*) FROM document_page").fetchone()[0]
+        unique_slides = store.conn.execute("SELECT COUNT(*) FROM page").fetchone()[0]
+        images = {"total": total_images, "unique": unique_images,
+                  "removed": max(0, total_images - unique_images)}
+        slides = {"total": total_slides, "unique": unique_slides,
+                  "removed": max(0, total_slides - unique_slides)}
     finally:
         store.close()
-    return trees, images
+    return trees, images, slides
 
 
 def _tom_rapport(mode: str, trash: str | None) -> dict:
@@ -330,5 +335,6 @@ def _tom_rapport(mode: str, trash: str | None) -> dict:
                  "parse_mb_per_second": 0.0, "est_seconds_saved_by_prefilter": 0.0},
         "prefilter": {}, "phases": {}, "slowest_files": [], "hints": [],
         "removed": [], "kept": [], "moved_files": 0,
-        "version_trees": [], "images": {"total": 0, "unique": 0},
+        "version_trees": [], "images": {"total": 0, "unique": 0, "removed": 0},
+        "slides_count": {"total": 0, "unique": 0, "removed": 0},
     }

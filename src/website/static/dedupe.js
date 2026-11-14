@@ -280,6 +280,27 @@ runBtn.addEventListener("click", async () => {
 /* ---------- Report ---------- */
 const stageLabel = (k) => { const s = t("stage_" + k); return s === "stage_" + k ? k : s; };
 
+/* Compact side-by-side dedup stats: Slides | Images, each total -> unique (removed). */
+function dedupPairHtml(r) {
+  const sl = r.slides_count || { total: 0, unique: 0, removed: 0 };
+  const im = r.images || { total: 0, unique: 0, removed: 0 };
+  const removedSl = sl.removed ?? Math.max(0, (sl.total || 0) - (sl.unique || 0));
+  const removedIm = im.removed ?? Math.max(0, (im.total || 0) - (im.unique || 0));
+  const cell = (label, d, removed) => `
+    <div class="is-dedup">
+      <div class="is-dedup__title">${label}</div>
+      <div class="is-dedup__nums">
+        <span class="is-dedup__kept">${fmtNum(d.unique)}</span>
+        <span class="is-dedup__of">/ ${fmtNum(d.total)}</span>
+      </div>
+      <div class="is-dedup__removed">${fmtNum(removed)} ${t("removed_label")}</div>
+    </div>`;
+  return `<div class="is-dedup-pair">
+      ${cell(t("slides_label"), sl, removedSl)}
+      ${cell(t("images_label"), im, removedIm)}
+    </div>`;
+}
+
 function renderReport(r, roundTrip) {
   const sp = r.space, fl = r.files, tm = r.time, w = r.web;
   const removed = sp.removed_this_run_bytes, kept = sp.kept_bytes, total = removed + kept;
@@ -337,10 +358,9 @@ function renderReport(r, roundTrip) {
       <dt>${t("k_found")}</dt><dd>${fmtNum(fl.found)}</dd>
       <dt>${t("k_identical")}</dt><dd>${fmtNum(fl.duplicates_by_content)}</dd>
       <dt>${t("k_parsed")}</dt><dd>${fmtNum(fl.parsed)}</dd>
-      <dt>${t("k_total_images")}</dt><dd>${fmtNum((r.images || {}).total)}</dd>
-      <dt>${t("k_unique")}</dt><dd>${fmtNum((r.images || {}).unique ?? r.slides.unique)}</dd>
       ${fl.errors ? `<dt>${t("k_unreadable")}</dt><dd>${fmtNum(fl.errors)}</dd>` : ""}
     </dl>
+    ${dedupPairHtml(r)}
 
     <h3 class="is-subhead">${t("performance")}</h3>
     <dl class="is-kv">
@@ -359,191 +379,35 @@ function renderReport(r, roundTrip) {
   renderVersionTrees(r.version_trees || []);
 }
 
-/* ---------- Versionsträd: tabell att välja ur + en zoombar ECharts-graf ---------- */
-let _treeChart = null;          // ECharts-instans
-let _families = [];             // [{meta, fam}] för körningen
-let _selectedIdx = 0;
-
+/* ---------- Version trees: a compact LIST; click opens the /versions graph page ---------- */
 async function renderVersionTrees(trees) {
   const section = document.getElementById("treeSection");
-  if (!section) return;
+  const list = document.getElementById("treeList");
+  if (!section || !list) return;
   if (!trees.length) { section.hidden = true; return; }
 
-  // Hämta varje familj en gång
-  _families = [];
+  // Fetch each family once to show version count + savings in the row.
+  const rows = [];
   for (const t of trees) {
+    let fam = null;
     try {
       const resp = await fetch(`/api/tree/${t.doc_id}`);
-      if (!resp.ok) continue;
-      _families.push({ meta: t, fam: await resp.json() });
-    } catch (e) { /* hoppa över */ }
+      if (resp.ok) fam = await resp.json();
+    } catch (e) { /* skip */ }
+    const saved = fam && fam.savings ? fam.savings.saved_bytes : 0;
+    const size = fam ? fam.nodes.length : t.family_size;
+    rows.push(`<a class="is-tree-rowlink" href="/versions?doc=${encodeURIComponent(t.doc_id)}">
+        <span class="is-chip">${t.source_type.toUpperCase()}</span>
+        <span class="is-tree-rowlink__name">${escapeHtml(t.name)}</span>
+        <span class="is-tree-rowlink__meta">${size} versions</span>
+        <span class="is-tree-rowlink__saved">\u2212${fmtBytes(saved)}</span>
+        <span class="is-tree-rowlink__arrow" aria-hidden="true">\u2192</span>
+      </a>`);
   }
-  if (!_families.length) { section.hidden = true; return; }
-
+  list.innerHTML = rows.join("");
   section.hidden = false;
-  _selectedIdx = 0;
-  buildPicker();
-  ensureChart();
-  showFamily(0);
 }
 
-function buildPicker() {
-  const picker = document.getElementById("treePicker");
-  picker.innerHTML = _families.map((x, i) => {
-    const s = x.fam.savings || {};
-    return `<div class="is-tree-rowitem" role="row" data-i="${i}" aria-selected="${i === _selectedIdx}">
-      <span class="is-tree-rowitem__name">${escapeHtml(x.meta.name)}</span>
-      <span class="is-tree-rowitem__meta">${x.meta.source_type.toUpperCase()} · ${x.fam.nodes.length} versioner</span>
-      <span class="is-tree-rowitem__saved">−${fmtBytes(s.saved_bytes)}</span>
-    </div>`;
-  }).join("");
-  picker.onclick = (e) => {
-    const row = e.target.closest("[data-i]");
-    if (row) showFamily(Number(row.dataset.i));
-  };
-}
-
-function ensureChart() {
-  if (_treeChart) return;
-  if (typeof echarts === "undefined") return;         // CDN ej laddad
-  _treeChart = echarts.init(document.getElementById("treeChart"));
-  window.addEventListener("resize", () => _treeChart && _treeChart.resize());
-}
-
-function dark() { return document.body.classList.contains("body--dark"); }
-function cssVar(n) { return getComputedStyle(document.body).getPropertyValue(n).trim(); }
-
-// Bygg ECharts-trädet från familjens noder + kanter (DAG -> trädstruktur via föräldrar)
-function toEChartsTree(fam) {
-  const byId = {}; fam.nodes.forEach(n => byId[n.id] = { ...n, children: [] });
-  const childSet = new Set();
-  for (const e of fam.edges) {
-    if (byId[e.parent] && byId[e.child]) {
-      byId[e.parent].children.push(byId[e.child]);
-      childSet.add(e.child);
-    }
-  }
-  const roots = fam.nodes.filter(n => !childSet.has(n.id)).map(n => byId[n.id]);
-  const mk = (n) => {
-    const isNew = n.id === fam.selected;        // kom in i den här körningen
-    const isClicked = n.id === _clickedId;      // vald med klick
-    return {
-      name: shortName(n.name),
-      _id: n.id, _full: n.name, _pages: n.pages, _date: n.date,
-      _selected: isNew,
-      itemStyle: {
-        color: isNew ? cssVar("--green") : cssVar("--primary"),
-        borderColor: isClicked ? cssVar("--accent") : (isNew ? cssVar("--green") : cssVar("--primary")),
-        borderWidth: isClicked ? 5 : (isNew ? 4 : 2),
-        shadowBlur: isClicked ? 22 : (isNew ? 14 : 0),
-        shadowColor: isClicked ? cssVar("--accent") : cssVar("--green"),
-      },
-      symbolSize: isClicked ? 18 : (isNew ? 15 : 11),
-      children: (n.children || []).map(mk),
-    };
-  };
-  return roots.map(mk);
-}
-
-let _clickedId = null;    // nod vald med klick (för markering + popover)
-
-let _orient = "TB";
-
-function showFamily(i) {
-  _selectedIdx = i;
-  const { fam } = _families[i];
-  document.querySelectorAll("#treePicker [data-i]").forEach(el =>
-    el.setAttribute("aria-selected", Number(el.dataset.i) === i));
-
-  ensureChart();
-  if (_treeChart) {
-    const data = toEChartsTree(fam);
-    _treeChart.setOption({
-      tooltip: {
-        trigger: "item", triggerOn: "mousemove",
-        formatter: (p) => {
-          const d = p.data;
-          const e = (fam.edges || []).find(x => x.child === d._id);
-          const change = e ? `${e.relation}: +${e.added} / −${e.removed} pages`
-                           : (d._selected ? "added now" : "original version");
-          return `<b>${escapeHtml(d._full)}</b><br>${d._pages} pages<br>${(d._date||"").slice(0,10)}<br>${change}`;
-        },
-      },
-      series: [{
-        type: "tree", data,
-        orient: _orient,
-        roam: true,                     // zoom + panorera
-        initialTreeDepth: -1,           // visa alla
-        symbol: "circle",
-        label: { position: _orient === "TB" ? "bottom" : "right",
-                 color: cssVar("--text"), fontSize: 12, distance: 8 },
-        lineStyle: { color: cssVar("--primary"), width: 2, opacity: .5, curveness: .25 },
-        expandAndCollapse: true, animationDuration: 400,
-        top: "6%", left: "8%", right: "8%", bottom: "6%",
-      }],
-    }, true);
-    _treeChart.off("click");
-    _treeChart.on("click", (p) => {
-      if (!p.data || !p.data._id) return;
-      _clickedId = p.data._id;
-      openNodePopover(fam, p.data);
-      showFamily(_selectedIdx);        // rita om -> markerar klickad nod
-    });
-    _treeChart.resize();
-  }
-
-  // besparingar
-  const s = fam.savings || {};
-  document.getElementById("treeSavings").innerHTML =
-    `Saved <b>${fmtBytes(s.saved_bytes)}</b> (${(s.saved_percent||0).toFixed(1)} % of ${fmtBytes(s.full_bytes)})`;
-
-  // klicka en nod i grafen for info + nedladdning (popover)
-  document.getElementById("treeDl").innerHTML =
-    `<span class="is-field__hint">Click a version in the graph to see details and download it.</span>`;
-}
-
-function openNodePopover(fam, d) {
-  const pop = document.getElementById("nodePopover");
-  if (!pop) return;
-  const e = (fam.edges || []).find(x => x.child === d._id);
-  const change = e ? `${e.relation}: +${e.added} / −${e.removed} pages`
-                   : (d._selected ? "added now" : "original version");
-  pop.innerHTML = `
-    <button class="is-pop-close" id="popClose" aria-label="Close">×</button>
-    <div class="is-pop-name">${escapeHtml(d._full)}</div>
-    <dl class="is-kv">
-      <dt>Pages</dt><dd>${fmtNum(d._pages)}</dd>
-      <dt>Date</dt><dd>${(d._date||"").slice(0,19).replace("T"," ")}</dd>
-      <dt>Change</dt><dd>${change}</dd>
-      ${d._selected ? "<dt>Status</dt><dd>Added now</dd>" : ""}
-    </dl>
-    <button class="is-btn is-btn--sm" id="popDl">Download this version</button>`;
-  pop.hidden = false;
-  document.getElementById("popClose").onclick = () => { pop.hidden = true; _clickedId = null; showFamily(_selectedIdx); };
-  document.getElementById("popDl").onclick = () => { window.location = `/api/tree/${d._id}/download`; };
-}
-
-function shortName(n) { return n.length > 24 ? n.slice(0, 22) + "…" : n; }
-
-/* verktygsrad: riktning, återställ, helskärm */
-document.getElementById("orientTB").addEventListener("click", () => setOrient("TB"));
-document.getElementById("orientLR").addEventListener("click", () => setOrient("LR"));
-function setOrient(o) {
-  _orient = o;
-  document.getElementById("orientTB").setAttribute("aria-pressed", o === "TB");
-  document.getElementById("orientLR").setAttribute("aria-pressed", o === "LR");
-  if (_families.length) showFamily(_selectedIdx);
-}
-document.getElementById("treeReset").addEventListener("click", () => {
-  if (_families.length) showFamily(_selectedIdx);   // ritar om -> återställer zoom/pan
-});
-document.getElementById("treeFull").addEventListener("click", () => {
-  const card = document.getElementById("treeSection");
-  if (document.fullscreenElement) document.exitFullscreen();
-  else card.requestFullscreen && card.requestFullscreen();
-  setTimeout(() => _treeChart && _treeChart.resize(), 150);
-});
-document.addEventListener("fullscreenchange", () => setTimeout(() => _treeChart && _treeChart.resize(), 150));
 /* ---------- Language switch: redo everything built in JS ---------- */
 function setExtHint() {
   $("#extHint").textContent = extensions ? t("ext_hint_types", { types: extensions.join(", ") })
