@@ -60,14 +60,37 @@ def _sha(*parts: str) -> str:
     return h.hexdigest()
 
 
+def normalize_text(text: str) -> str:
+    """Normalize page/slide text the same way src/dedupe/slide_dedupe.py does.
+
+    Collapses whitespace, drops empty lines and page-number/footer lines, so a
+    slide re-exported or moved to a new position still hashes the same. We reuse
+    the dedupe implementation when available so both code paths agree exactly;
+    the fallback keeps the store usable standalone (e.g. without pypdf/pptx).
+    """
+    try:
+        from dedupe.slide_dedupe import normalize_text as _dedupe_normalize
+        return _dedupe_normalize(text, drop_page_numbers=True)
+    except Exception:
+        return "\n".join(" ".join(line.split()) for line in (text or "").splitlines()
+                         if line.split())
+
+
 def hash_text(text: str) -> str:
-    """Hash of a page's text. For PPTX this is the SPEAKER NOTES; for PDF the page text."""
-    return _sha((text or "").strip())
+    """Hash of a page's text. For PPTX this is the SPEAKER NOTES; for PDF the page text.
+
+    Uses the shared normalization so the store and slide_dedupe agree on what
+    'the same text' means.
+    """
+    return _sha(normalize_text(text))
 
 
 def hash_images(image_hashes: list[str] | None) -> str:
-    """Hash of a page's picture set (order-independent)."""
-    return _sha(*sorted(image_hashes or []))
+    """Hash of a page's picture set (order-independent, duplicates ignored).
+
+    Matches slide_dedupe.slide_hash's sorted(set(...)) handling of image hashes.
+    """
+    return _sha(*sorted(set(image_hashes or [])))
 
 
 def combined_hash(text_hash: str, image_hash: str) -> str:
