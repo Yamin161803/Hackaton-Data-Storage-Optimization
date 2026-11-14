@@ -142,6 +142,69 @@ def assign(sections: list[Section], segments: list[Segment]) -> None:
         sections[best].segments.append(seg)
 
 
+# A frame with fewer words than this under it counts as (nearly) silent ...
+MIN_WORDS = 10
+# ... unless it is on screen at least this long (a slide people look at quietly).
+# Frames with no words at all count as silent however long they are shown.
+KEEP_SECONDS = 10.0
+
+
+def _word_count(sec: Section) -> int:
+    return sum(len(seg.text.split()) for seg in sec.segments)
+
+
+def drop_silent_runs(sections: list[Section], max_silent: int,
+                     min_words: int = MIN_WORDS, keep_seconds: float = KEEP_SECONDS,
+                     video_end: float | None = None
+                     ) -> tuple[list[Section], list[Section]]:
+    """Drop frames from long stretches with no or little speech. Returns (kept, dropped).
+
+    Call after assign(). A frame is silent when
+      - no transcript text was put under it (it would show "(no speech)"): real pauses,
+        frames that flash by while one sentence is spoken (the sentence goes under only
+        one of them), or whisper reporting one long segment over music; or
+      - it has fewer than `min_words` words and is on screen for less than
+        `keep_seconds` (until the next frame, or `video_end` for the last one): e.g. the
+        presenter moving windows around while saying "okay, let me just...".
+    A run of up to `max_silent` silent frames in a row is kept (a short pause); a
+    longer run is dropped. The text of a dropped frame is not lost: it moves to the
+    previous kept frame (or the next one, at the start). Without any text (no audio
+    track) nothing is dropped, and at least one frame is always kept.
+    """
+    if max_silent < 0 or not any(sec.segments for sec in sections):
+        return sections, []
+    ends = [s.seconds for s in sections[1:]] + [video_end if video_end is not None
+                                                else float("inf")]
+    silent = [not sec.segments
+              or (_word_count(sec) < min_words and end - sec.seconds < keep_seconds)
+              for sec, end in zip(sections, ends)]
+    drop = [False] * len(sections)
+    i = 0
+    while i < len(sections):
+        j = i
+        while j < len(sections) and silent[j] == silent[i]:
+            j += 1                              # sections[i:j] is one run
+        if silent[i] and j - i > max_silent:
+            drop[i:j] = [True] * (j - i)
+        i = j
+    if all(drop):
+        return sections, []
+
+    kept, dropped = [], []
+    orphans: list[Segment] = []                 # text from dropped frames before any kept
+    for sec, gone in zip(sections, drop):
+        if gone:
+            dropped.append(sec)
+            (kept[-1].segments if kept else orphans).extend(sec.segments)
+            sec.segments = []
+        else:
+            if orphans:
+                sec.segments[:0] = orphans
+                orphans = []
+            kept.append(sec)
+    return kept, dropped
+
+
 def _link(target: Path, md_dir: Path) -> str:
     try:
         rel = Path(os.path.relpath(target.resolve(), md_dir.resolve())).as_posix()
@@ -303,7 +366,9 @@ def build_notes(split_dir: str | Path, output: str | Path | None = None,
                 embed_images: bool = False, frames_dir: str | Path | None = None,
                 speakers: bool = False, video: VideoInfo | None = None,
                 part_seconds: float | None = None,
-                keyworder: Callable[[str], list[str] | None] | None = None) -> Path:
+                keyworder: Callable[[str], list[str] | None] | None = None,
+                max_silent_frames: int | None = None,
+                min_words: int = MIN_WORDS) -> Path:
     """Write the Markdown file and return its path (default: <split_dir>/notes.md).
 
     summarizer: called with the full transcript text; its Summary goes at the top.
@@ -317,6 +382,10 @@ def build_notes(split_dir: str | Path, output: str | Path | None = None,
     video: the recording's fingerprint; it goes at the top of the notes.
     part_seconds: audio-only recordings (no frames): split the text into parts of this
     many seconds instead of one part per frame; frames/timestamps.csv is not needed.
+    max_silent_frames: leave out frames from runs of more than this many frames in a
+    row with no speech, or fewer than `min_words` words while shown briefly (see
+    drop_silent_runs). Their text moves to the previous kept frame. None = keep every
+    frame.
     """
     split_dir = Path(split_dir)
     timestamps_csv = split_dir / "frames" / "timestamps.csv"
@@ -339,6 +408,9 @@ def build_notes(split_dir: str | Path, output: str | Path | None = None,
         sections = read_frames(timestamps_csv, Path(frames_dir) if frames_dir else None)
     assign(sections, segments)
     video_end = max([sections[-1].seconds] + [s.end for s in segments])
+    if max_silent_frames is not None and not part_seconds:
+        sections, _ = drop_silent_runs(sections, max_silent_frames, min_words,
+                                       video_end=video_end)
     text = transcript_text(segments)
     summary = summarizer(text) if summarizer else None
     keywords = (keyworder(text) or None) if keyworder else None
@@ -371,6 +443,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--ollama-url", default=DEFAULT_URL, help=f"default: {DEFAULT_URL}")
     p.add_argument("--hint", help="extra context for the summary, e.g. correct spelling of "
                                   "names and terms the transcript gets wrong")
+    p.add_argument("--max-silent-frames", type=int,
+                   help="leave out frames from runs of more than N frames in a row where "
+                        "nobody speaks (default: keep every frame)")
+    p.add_argument("--min-words", type=int, default=MIN_WORDS,
+                   help="with --max-silent-frames: a briefly shown frame with fewer words "
+                        f"than this counts as silent (default: {MIN_WORDS})")
     args = p.parse_args(argv)
 
     summarizer = None
@@ -380,7 +458,8 @@ def main(argv: list[str] | None = None) -> int:
             return summarize(text, model=args.model, url=args.ollama_url, hint=args.hint)
     try:
         md = build_notes(args.split_dir, args.output, args.transcript, args.title, summarizer,
-                         speakers=args.speakers)
+                         speakers=args.speakers, max_silent_frames=args.max_silent_frames,
+                         min_words=args.min_words)
     except (FileNotFoundError, ValueError, SummaryError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         if isinstance(exc, SummaryError):

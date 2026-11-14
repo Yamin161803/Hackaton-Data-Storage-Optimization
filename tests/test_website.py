@@ -163,10 +163,11 @@ def site(tmp_path, monkeypatch):
     return client, calls, notes
 
 
-def upload(client, path: Path, name: str | None = None, **form):
+def upload(client, path: Path, name: str | None = None, lang: str | None = None, **form):
+    """lang: the page language the browser sends in X-Lang (None = no header)."""
     return client.post("/api/compress", data={
         "file": (io.BytesIO(path.read_bytes()), name or path.name), **form},
-        content_type="multipart/form-data")
+        content_type="multipart/form-data", headers={"X-Lang": lang} if lang else {})
 
 
 def test_upload_video_returns_notes_with_embedded_images(site, tmp_path):
@@ -225,7 +226,7 @@ def test_non_video_is_rejected(site, tmp_path):
     doc = tmp_path / "notes.pdf"
     doc.write_bytes(b"%PDF-1.4")
     resp = upload(client, doc)
-    assert resp.status_code == 415 and "videofiler" in resp.get_json()["detail"]
+    assert resp.status_code == 415 and "Only video files" in resp.get_json()["detail"]
     assert calls == []
 
 
@@ -297,7 +298,7 @@ def test_bad_number_of_speakers(site, tmp_path, bad):
     client, calls, _ = site
     resp = upload(client, make_video(tmp_path / "a.mp4", [("black", 1)]),
                   speakers="1", num_speakers=bad)
-    assert resp.status_code == 400 and "Antal talare" in resp.get_json()["detail"]
+    assert resp.status_code == 400 and "Number of speakers" in resp.get_json()["detail"]
     assert calls == []
 
 
@@ -339,7 +340,7 @@ def test_warning_when_speakers_could_not_be_found(site, tmp_path):
     resp = upload(client, make_video(tmp_path / "a.mp4", [("black", 1)]), speakers="1")
     assert resp.status_code == 200                             # notes still come back
     warning = unquote(resp.headers["X-Warning"])
-    assert "vem som pratar" in warning and ".hf_token" in warning
+    assert "who is speaking" in warning and ".hf_token" in warning
     assert "X-Warning" in resp.headers["Access-Control-Expose-Headers"]
 
 
@@ -401,10 +402,71 @@ def test_warning_when_ollama_is_down(site, tmp_path):
     resp = upload(client, make_video(tmp_path / "a.mp4", [("black", 1)]), keywords="1")
     warning = unquote(resp.headers["X-Warning"])
     assert resp.status_code == 200
-    assert "Ingen sammanfattning" in warning and "Inga sökord" in warning
+    assert "No summary" in warning and "No keywords" in warning
 
 
 def test_page_has_summary_and_keyword_choices(site):
     client, _, _ = site
     page = client.get("/").data.decode("utf-8")
     assert 'id="summaryInput" checked' in page and 'id="keywordsInput"' in page
+
+
+# ---------- language: English by default, Swedish when the page asks ----------
+
+def test_messages_are_english_by_default(site, tmp_path):
+    client, _, _ = site
+    doc = tmp_path / "notes.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    assert "Only video files" in upload(client, doc).get_json()["detail"]
+    assert "Only video files" in upload(client, doc, lang="de").get_json()["detail"]
+
+
+def test_messages_in_swedish_when_asked(site, tmp_path):
+    client, _, _ = site
+    doc = tmp_path / "notes.pdf"
+    doc.write_bytes(b"%PDF-1.4")
+    assert "Bara videofiler" in upload(client, doc, lang="sv").get_json()["detail"]
+    resp = upload(client, make_video(tmp_path / "a.mp4", [("black", 1)]), lang="sv",
+                  speakers="1", num_speakers="99")
+    assert "Antal talare" in resp.get_json()["detail"]
+
+
+def test_warning_in_swedish_when_asked(site, tmp_path):
+    from urllib.parse import unquote
+    client, _, _ = site
+    client.diarization["ollama"] = False
+    resp = upload(client, make_video(tmp_path / "a.mp4", [("black", 1)]), lang="sv",
+                  keywords="1")
+    warning = unquote(resp.headers["X-Warning"])
+    assert "Ingen sammanfattning" in warning and "Inga sökord" in warning
+
+
+def test_lang_header_allowed_by_cors(site):
+    client, _, _ = site
+    resp = client.get("/")
+    assert "X-Lang" in resp.headers["Access-Control-Allow-Headers"]
+
+
+def test_page_files_are_served_with_i18n(site):
+    client, _, _ = site
+    for page in ("/", "/dedupe"):
+        html = client.get(page).get_data(as_text=True)
+        assert '<html lang="en">' in html and 'src="i18n.js"' in html
+        assert 'data-lang="sv"' in html
+    js = client.get("/i18n.js")
+    assert js.status_code == 200 and "sv: {" in js.get_data(as_text=True)
+
+
+def test_i18n_has_the_same_keys_in_both_languages():
+    import re
+    js = (Path(__file__).resolve().parents[1] / "src/website/static/i18n.js").read_text(
+        encoding="utf-8")
+    en = js.split("  en: {", 1)[1].split("\n  sv: {", 1)[0]
+    sv = js.split("\n  sv: {", 1)[1].split("\n};", 1)[0]
+    keys = lambda block: set(re.findall(r"(?m)(?:^\s+|,\s*)(\w+):\s", block))  # noqa: E731
+    assert keys(en) == keys(sv) and len(keys(en)) > 100
+
+
+def test_server_messages_have_the_same_keys_in_both_languages():
+    from website.i18n import MESSAGES
+    assert MESSAGES["en"].keys() == MESSAGES["sv"].keys()

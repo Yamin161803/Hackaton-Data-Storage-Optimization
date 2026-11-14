@@ -1,6 +1,7 @@
-/* Sidan "Rensa dubbletter": kör src/dedupe/slide_dedupe.py via /api/dedupe/* (website/dedupe_api.py). */
+/* The "Remove duplicates" page: runs src/dedupe/slide_dedupe.py via /api/dedupe/* (website/dedupe_api.py).
+   Page text is in i18n.js (t(), fmtLocal(), LANG); loaded before this file. */
 const BACKEND = "http://localhost:8000";
-// Samma server som serverade sidan; som fil eller via Live Server (5500/5501) används BACKEND
+// The server that served the page; as a file or via Live Server (5500/5501) BACKEND is used
 const SAME_SERVER = location.protocol.startsWith("http") && !["5500", "5501"].includes(location.port);
 const API = SAME_SERVER ? "/api/dedupe" : `${BACKEND}/api/dedupe`;
 
@@ -12,13 +13,15 @@ const runBtn = $("#runBtn"), emptyBtn = $("#emptyBtn"), resultBody = $("#resultB
 
 let mode = "batch";
 let running = false;
-// Det användaren godkände när automatisk radering slogs på: { path, files, bytes }.
-// Servern raderar bara om papperskorgen fortfarande ser ut så.
+// What the user approved when automatic deletion was turned on: { path, files, bytes }.
+// The server only deletes if the trash folder still looks like that.
 let confirmed = null;
+let extensions = null;            // supported file types, from /defaults
+let lastReport = null;            // [report, roundTrip], re-drawn when the language changes
 
 $("#apiChip .is-mono").textContent = API;
 
-/* ---------- Tema (samma inställning som startsidan) ---------- */
+/* ---------- Theme (same setting as the start page) ---------- */
 (function initTheme() {
   let saved = null;
   try { saved = localStorage.getItem("theme"); } catch (e) {}
@@ -30,7 +33,7 @@ $("#themeBtn").addEventListener("click", () => {
   try { localStorage.setItem("theme", dark ? "dark" : "light"); } catch (e) {}
 });
 
-/* ---------- Hjälpfunktioner ---------- */
+/* ---------- Helpers ---------- */
 function fmtBytes(n) {
   if (n == null) return "–";
   const u = ["B", "kB", "MB", "GB", "TB"]; let i = 0;
@@ -40,11 +43,11 @@ function fmtBytes(n) {
 function fmtSecs(s) {
   if (s == null) return "–";
   if (s < 1) return `${Math.round(s * 1000)} ms`;
-  if (s < 60) return `${s.toFixed(s < 10 ? 2 : 1)} s`;
+  if (s < 60) return `${fmtLocal(s, s < 10 ? 2 : 1)} s`;
   return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
 }
-function fmtNum(n) { return Number(n || 0).toLocaleString("sv-SE"); }
-function filer(n) { return `${fmtNum(n)} ${n === 1 ? "fil" : "filer"}`; }
+function fmtNum(n) { return fmtLocal(n); }
+function filer(n) { return t("files", { n: fmtNum(n), count: n }); }
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
@@ -52,13 +55,16 @@ function remember(key, value) { try { localStorage.setItem(key, value); } catch 
 function recall(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
 
 async function api(path, body) {
-  const opts = body === undefined ? {} :
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const headers = { "X-Lang": LANG };                // server messages in the page language
+  const opts = body === undefined ? { headers } :
+    { method: "POST", headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(body) };
   let resp;
   try { resp = await fetch(`${API}${path}`, opts); }
-  catch (e) { throw Object.assign(new Error(`Kunde inte nå servern på ${API}. Kontrollera att den körs.`), { status: 0 }); }
+  catch (e) { throw Object.assign(new Error(t("unreachable", { url: API })), { status: 0 }); }
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw Object.assign(new Error(data.detail || `Fel ${resp.status}`), { status: resp.status, data });
+  if (!resp.ok) throw Object.assign(new Error(data.detail || t("error_status", { status: resp.status })),
+                                     { status: resp.status, data });
   return data;
 }
 const getTrash = () => api(`/trash?path=${encodeURIComponent(trashInput.value.trim())}`);
@@ -78,7 +84,7 @@ function setStep(n) {
   document.querySelectorAll(".is-step").forEach(el => el.classList.toggle("is-active", +el.dataset.step === n));
 }
 
-/* ---------- Bekräftelse ---------- */
+/* ---------- Confirmation ---------- */
 const confirmDialog = $("#confirmDialog");
 function askConfirm({ title, text, ok, info }) {
   $("#confirmTitle").textContent = title;
@@ -93,19 +99,17 @@ function askConfirm({ title, text, ok, info }) {
   return new Promise(resolve =>
     confirmDialog.addEventListener("close", () => resolve(confirmDialog.returnValue === "ok"), { once: true }));
 }
-const AUTO_TEXT = "Efter varje rensning raderas allt i papperskorgen permanent, både filerna som redan " +
-                  "ligger där och de som flyttas dit. Det går inte att ångra.";
-const EMPTY_TEXT = "Alla filer i papperskorgen raderas permanent. Det går inte att ångra.";
 
-/* ---------- Papperskorgen ---------- */
+
+/* ---------- Trash folder ---------- */
 let trashTimer = null;
 async function refreshTrash() {
   if (!moveInput.checked) return;
   try {
     const info = await getTrash();
-    trashInfo.textContent = !info.exists ? `Mappen "${info.name}" skapas vid första rensningen.`
-      : info.files ? `"${info.name}" innehåller ${filer(info.files)}, ${fmtBytes(info.bytes)}.`
-      : `"${info.name}" är tom.`;
+    trashInfo.textContent = !info.exists ? t("trash_created", { name: info.name })
+      : info.files ? t("trash_contains", { name: info.name, files: filer(info.files), size: fmtBytes(info.bytes) })
+      : t("trash_empty", { name: info.name });
     emptyBtn.disabled = !info.files;
   } catch (e) {
     trashInfo.textContent = e.message;
@@ -121,17 +125,17 @@ function setAutoDelete(on, info = null) {
 
 autoDeleteInput.addEventListener("change", async () => {
   if (!autoDeleteInput.checked) { setAutoDelete(false); return; }
-  autoDeleteInput.checked = false;           // på först efter bekräftelse
+  autoDeleteInput.checked = false;           // on only after confirmation
   try {
     const info = await getTrash();
-    const ok = await askConfirm({ title: "Slå på automatisk radering?", text: AUTO_TEXT,
-                                  ok: "Slå på radering", info });
+    const ok = await askConfirm({ title: t("auto_title"), text: t("auto_text"),
+                                  ok: t("auto_ok"), info });
     setAutoDelete(ok, ok ? info : null);
   } catch (e) { trashInfo.textContent = e.message; }
 });
 
 trashInput.addEventListener("input", () => {
-  if (autoDeleteInput.checked) setAutoDelete(false);   // ny mapp = ny bekräftelse
+  if (autoDeleteInput.checked) setAutoDelete(false);   // new folder = new confirmation
   remember("dedupe.trash", trashInput.value);
   clearTimeout(trashTimer);
   trashTimer = setTimeout(refreshTrash, 300);
@@ -141,20 +145,20 @@ emptyBtn.addEventListener("click", async () => {
   emptyBtn.disabled = true;
   try {
     let info = await getTrash();
-    let title = "Töm papperskorgen?";
+    let title = t("empty_title");
     for (;;) {
-      if (!info.files) { trashInfo.textContent = `"${info.name}" är redan tom.`; return; }
-      if (!await askConfirm({ title, text: EMPTY_TEXT, ok: "Radera filerna", info })) return;
+      if (!info.files) { trashInfo.textContent = t("trash_already_empty", { name: info.name }); return; }
+      if (!await askConfirm({ title, text: t("empty_text"), ok: t("delete_files"), info })) return;
       try {
         const res = await api("/empty", { path: info.path, files: info.files, bytes: info.bytes });
         if (autoDeleteInput.checked) confirmed = res.trash;
         await refreshTrash();
-        trashInfo.textContent = `Raderade ${filer(res.deleted_files)}, ${fmtBytes(res.freed_bytes)} frigjort.`;
+        trashInfo.textContent = t("deleted_freed", { files: filer(res.deleted_files), size: fmtBytes(res.freed_bytes) });
         return;
       } catch (e) {
         if (e.status !== 409 || !e.data?.trash) throw e;
-        info = e.data.trash;                       // innehållet ändrades: fråga igen
-        title = "Papperskorgen har ändrats. Töm den ändå?";
+        info = e.data.trash;                       // the contents changed: ask again
+        title = t("changed_empty");
       }
     }
   } catch (e) {
@@ -165,10 +169,10 @@ emptyBtn.addEventListener("click", async () => {
   }
 });
 
-/* ---------- Val ---------- */
+/* ---------- Choices ---------- */
 function updateRunLabel() {
-  runBtn.textContent = !moveInput.checked ? "Analysera (inget flyttas)"
-    : autoDeleteInput.checked ? "Rensa och radera" : "Rensa: flytta avvisade filer";
+  runBtn.textContent = t(!moveInput.checked ? "run_report"
+    : autoDeleteInput.checked ? "run_delete" : "run_move");
   runBtn.classList.toggle("is-btn--danger", moveInput.checked && autoDeleteInput.checked);
 }
 moveInput.addEventListener("change", () => {
@@ -183,7 +187,7 @@ document.querySelectorAll("[data-mode]").forEach(b => b.addEventListener("click"
   document.querySelectorAll("[data-mode]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
 }));
 
-/* ---------- Mappväljare ---------- */
+/* ---------- Folder picker ---------- */
 const picker = $("#pickerDialog"), pickerList = $("#pickerList"), pickerPath = $("#pickerPath");
 const FOLDER_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
 let pickerFor = null, pickerCurrent = null, pickerParent = null;
@@ -199,8 +203,8 @@ async function pickerLoad(path, fallback = false) {
       `<button type="button" data-path="${escapeHtml(c.path)}">${escapeHtml(c.name)}</button>`).join("");
     pickerList.innerHTML = d.dirs.length
       ? d.dirs.map(x => `<button class="is-picker__item" type="button" role="listitem" data-path="${escapeHtml(x.path)}">${FOLDER_ICON}<span>${escapeHtml(x.name)}</span></button>`).join("")
-      : '<div class="is-empty">Inga undermappar.</div>';
-    $("#pickerHint").textContent = `${filer(d.supported_files_here)} att jämföra direkt i den här mappen (undermappar tas också med).`;
+      : `<div class="is-empty">${t("no_subfolders")}</div>`;
+    $("#pickerHint").textContent = t("picker_hint", { files: filer(d.supported_files_here) });
   } catch (e) {
     if (fallback) return pickerLoad("");
     $("#pickerHint").textContent = e.message;
@@ -208,10 +212,13 @@ async function pickerLoad(path, fallback = false) {
 }
 document.querySelectorAll("[data-browse]").forEach(b => b.addEventListener("click", () => {
   pickerFor = document.getElementById(b.dataset.browse);
-  $("#pickerTitle").textContent = pickerFor === trashInput ? "Välj papperskorg" : "Välj mapp att rensa";
+  setPickerTitle();
   picker.showModal();
   pickerLoad(pickerFor.value.trim(), true);
 }));
+function setPickerTitle() {
+  $("#pickerTitle").textContent = t(pickerFor === trashInput ? "pick_trash" : "pick_target");
+}
 pickerList.addEventListener("click", e => { const b = e.target.closest("[data-path]"); if (b) pickerLoad(b.dataset.path); });
 $("#pickerChips").addEventListener("click", e => { const b = e.target.closest("[data-path]"); if (b) pickerLoad(b.dataset.path); });
 $("#pickerUp").addEventListener("click", () => pickerParent && pickerLoad(pickerParent));
@@ -226,7 +233,7 @@ $("#pickerChoose").addEventListener("click", () => {
   picker.close();
 });
 
-/* ---------- Kör ---------- */
+/* ---------- Run ---------- */
 runBtn.addEventListener("click", async () => {
   if (running) return;
   const body = { target: targetInput.value.trim(), move: moveInput.checked, trash: trashInput.value.trim(),
@@ -234,10 +241,10 @@ runBtn.addEventListener("click", async () => {
                  fast_images: fastImagesInput.checked, confirm: confirmed };
   running = true; runBtn.disabled = true; emptyBtn.disabled = true;
   setStep(2);
-  const label = runBtn.textContent;
-  runBtn.innerHTML = '<span class="is-btn-spinner" aria-hidden="true"></span> Arbetar…';
+  runBtn.innerHTML = `<span class="is-btn-spinner" aria-hidden="true"></span> ${t("working")}`;
   const t0 = performance.now();
-  resultBody.innerHTML = `<div class="is-op-card" data-kind="info"><strong>Analyserar…</strong>
+  lastReport = null;
+  resultBody.innerHTML = `<div class="is-op-card" data-kind="info"><strong>${t("analysing")}</strong>
     <span class="is-mono">${escapeHtml(body.target)}</span><br><span id="elapsed">0.0 s</span></div>`;
   const timer = setInterval(() => {
     const el = $("#elapsed"); if (el) el.textContent = `${((performance.now() - t0) / 1000).toFixed(1)} s`;
@@ -249,60 +256,59 @@ runBtn.addEventListener("click", async () => {
       catch (e) {
         if (!(e.status === 409 && e.data?.trash && body.auto_delete)) throw e;
         clearInterval(timer);
-        const ok = await askConfirm({ title: "Papperskorgen har ändrats. Radera ändå?", text: AUTO_TEXT,
-                                      ok: "Rensa och radera", info: e.data.trash });
-        if (!ok) { setAutoDelete(false); throw new Error("Avbrutet: automatisk radering är nu avslagen."); }
+        const ok = await askConfirm({ title: t("changed_delete"), text: t("auto_text"),
+                                      ok: t("run_delete"), info: e.data.trash });
+        if (!ok) { setAutoDelete(false); throw new Error(t("cancelled")); }
         confirmed = body.confirm = e.data.trash;
       }
     }
     if (body.auto_delete && report.web.trash_after) confirmed = report.web.trash_after;
-    renderReport(report, (performance.now() - t0) / 1000);
+    lastReport = [report, (performance.now() - t0) / 1000];
+    renderReport(...lastReport);
     setStep(body.move ? 3 : 2);
   } catch (e) {
-    resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>Det gick inte</strong>${escapeHtml(e.message)}</div>`;
+    resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>${t("failed")}</strong>${escapeHtml(e.message)}</div>`;
     setStep(1);
   } finally {
     clearInterval(timer);
-    running = false; runBtn.disabled = false; runBtn.textContent = label;
+    running = false; runBtn.disabled = false; updateRunLabel();
     emptyBtn.disabled = false;
     refreshTrash();
   }
 });
 
-/* ---------- Rapport ---------- */
-const STAGE_LABEL = { load: "Index", scan: "Sök filer", prefilter: "Förfilter", extract: "Läs bilder",
-                      decide: "Välj filer", act: "Flytta" };
+/* ---------- Report ---------- */
+const stageLabel = (k) => { const s = t("stage_" + k); return s === "stage_" + k ? k : s; };
 
 function renderReport(r, roundTrip) {
   const sp = r.space, fl = r.files, tm = r.time, w = r.web;
   const removed = sp.removed_this_run_bytes, kept = sp.kept_bytes, total = removed + kept;
   const pct = total ? (100 * removed / total) : 0;
   const rel = (p) => {
-    const t = w.target.replace(/[\\/]+$/, "");
-    return p.startsWith(t) ? p.slice(t.length + 1) || p : p;
+    const base = w.target.replace(/[\\/]+$/, "");
+    return p.startsWith(base) ? p.slice(base.length + 1) || p : p;
   };
   const short = (s) => String(s).split(w.target.replace(/[\\/]+$/, "") + (w.target.includes("\\") ? "\\" : "/")).join("");
 
   let status;
   if (w.deleted) {
-    status = `<div class="is-op-card" data-kind="ok"><strong>Raderat</strong>
-      ${filer(w.deleted.files)} raderades från ${escapeHtml(w.trash)}: ${fmtBytes(w.deleted.bytes)} frigjort.</div>`;
+    status = `<div class="is-op-card" data-kind="ok"><strong>${t("deleted_title")}</strong>
+      ${t("deleted_text", { files: filer(w.deleted.files), trash: escapeHtml(w.trash), size: fmtBytes(w.deleted.bytes) })}</div>`;
   } else if (w.moved) {
-    status = `<div class="is-op-card" data-kind="ok"><strong>Flyttat</strong>
-      ${filer(r.moved_files)} flyttades till <span class="is-mono">${escapeHtml(w.trash)}</span>.
-      Utrymmet frigörs när papperskorgen töms.</div>`;
+    status = `<div class="is-op-card" data-kind="ok"><strong>${t("moved_title")}</strong>
+      ${t("moved_text", { files: filer(r.moved_files), trash: `<span class="is-mono">${escapeHtml(w.trash)}</span>` })}</div>`;
   } else {
-    status = `<div class="is-op-card" data-kind="info"><strong>Bara rapport</strong>
-      Inga filer flyttades. Slå på "Flytta avvisade filer" för att rensa.</div>`;
+    status = `<div class="is-op-card" data-kind="info"><strong>${t("report_only_title")}</strong>
+      ${escapeHtml(t("report_only_text"))}</div>`;
   }
   if (!fl.found) {
-    status = `<div class="is-op-card" data-kind="info"><strong>Inget att jämföra</strong>
-      Mappen innehåller inga PDF-, PowerPoint- eller bildfiler.</div>`;
+    status = `<div class="is-op-card" data-kind="info"><strong>${t("nothing_title")}</strong>
+      ${t("nothing_text")}</div>`;
   }
 
   const stages = Object.entries(tm.stages_seconds || {});
   const maxStage = Math.max(1e-9, ...stages.map(([, s]) => s));
-  const stageRows = stages.map(([k, s]) => `<div class="is-stage"><span>${STAGE_LABEL[k] || k}</span>
+  const stageRows = stages.map(([k, s]) => `<div class="is-stage"><span>${stageLabel(k)}</span>
       <div class="is-stage__bar"><div style="width:${(100 * s / maxStage).toFixed(1)}%"></div></div>
       <span class="is-stage__val">${fmtSecs(s)}</span></div>`).join("");
 
@@ -311,44 +317,44 @@ function renderReport(r, roundTrip) {
       <span class="is-filerow__size">${fmtBytes(f.bytes)}</span>
       <span class="is-filerow__why">${escapeHtml(short(f.reason))}</span></div>`).join("");
 
-  const savedLabel = w.deleted ? "frigjort (raderat)" : "sparas om avvisade filer raderas";
+  const savedLabel = t(w.deleted ? "saved_deleted" : "saved_if");
   resultBody.innerHTML = `
     <div class="is-stats">
-      <div><div class="is-stat__num">${fmtSecs(w.total_seconds)}</div><div class="is-stat__label">körtid</div></div>
+      <div><div class="is-stat__num">${fmtSecs(w.total_seconds)}</div><div class="is-stat__label">${t("run_time")}</div></div>
       <div><div class="is-stat__num is-good">${fmtBytes(removed)}</div><div class="is-stat__label">${savedLabel}</div></div>
-      <div><div class="is-stat__num">${pct.toFixed(1)} %</div><div class="is-stat__label">av ${fmtBytes(total)}</div></div>
+      <div><div class="is-stat__num">${fmtLocal(pct, 1)} %</div><div class="is-stat__label">${t("of_total", { size: fmtBytes(total) })}</div></div>
     </div>
-    <div class="is-dist-bar" role="img" aria-label="Behållet ${fmtBytes(kept)}, avvisat ${fmtBytes(removed)}">
+    <div class="is-dist-bar" role="img" aria-label="${t("dist_aria", { kept: fmtBytes(kept), removed: fmtBytes(removed) })}">
       <div style="width:${total ? 100 * kept / total : 0}%;background:var(--primary)"></div>
       <div style="width:${pct}%;background:var(--green)"></div>
     </div>
-    <div class="is-legend"><span><i style="background:var(--primary)"></i>Behålls ${filer(sp.kept_files)}, ${fmtBytes(kept)}</span>
-      <span><i style="background:var(--green)"></i>Avvisas ${filer(sp.removed_this_run_files)}, ${fmtBytes(removed)}</span></div>
+    <div class="is-legend"><span><i style="background:var(--primary)"></i>${t("kept_legend", { files: filer(sp.kept_files), size: fmtBytes(kept) })}</span>
+      <span><i style="background:var(--green)"></i>${t("rejected_legend", { files: filer(sp.removed_this_run_files), size: fmtBytes(removed) })}</span></div>
     ${status}
 
-    <h3 class="is-subhead">Filer</h3>
+    <h3 class="is-subhead">${t("c_files")}</h3>
     <dl class="is-kv">
-      <dt>Hittade</dt><dd>${fmtNum(fl.found)}</dd>
-      <dt>Identiska kopior (hittade utan att öppnas)</dt><dd>${fmtNum(fl.duplicates_by_content)}</dd>
-      <dt>Lästa</dt><dd>${fmtNum(fl.parsed)}</dd>
-      <dt>Totala bilder</dt><dd>${fmtNum((r.images || {}).total)}</dd>
-      <dt>Unika bilder</dt><dd>${fmtNum((r.images || {}).unique ?? r.slides.unique)}</dd>
-      ${fl.errors ? `<dt>Kunde inte läsas</dt><dd>${fmtNum(fl.errors)}</dd>` : ""}
+      <dt>${t("k_found")}</dt><dd>${fmtNum(fl.found)}</dd>
+      <dt>${t("k_identical")}</dt><dd>${fmtNum(fl.duplicates_by_content)}</dd>
+      <dt>${t("k_parsed")}</dt><dd>${fmtNum(fl.parsed)}</dd>
+      <dt>${t("k_total_images")}</dt><dd>${fmtNum((r.images || {}).total)}</dd>
+      <dt>${t("k_unique")}</dt><dd>${fmtNum((r.images || {}).unique ?? r.slides.unique)}</dd>
+      ${fl.errors ? `<dt>${t("k_unreadable")}</dt><dd>${fmtNum(fl.errors)}</dd>` : ""}
     </dl>
 
-    <h3 class="is-subhead">Prestanda</h3>
+    <h3 class="is-subhead">${t("performance")}</h3>
     <dl class="is-kv">
-      <dt>Total körtid (servern)</dt><dd>${fmtSecs(w.total_seconds)}</dd>
-      <dt>Analys</dt><dd>${fmtSecs(tm.total_seconds)}</dd>
-      ${w.deleted ? `<dt>Radering</dt><dd>${fmtSecs(w.deleted.seconds)}</dd>` : ""}
-      <dt>Med nätverk</dt><dd>${fmtSecs(roundTrip)}</dd>
-      <dt>Snitt per bild</dt><dd>${(tm.avg_ms_per_slide || 0).toFixed(2)} ms</dd>
-      <dt>Läshastighet</dt><dd>${(tm.parse_mb_per_second || 0).toFixed(1)} MB/s</dd>
-      ${fl.duplicates_by_content ? `<dt>Förfiltret sparade ungefär</dt><dd>${fmtSecs(tm.est_seconds_saved_by_prefilter)}</dd>` : ""}
+      <dt>${t("k_total_server")}</dt><dd>${fmtSecs(w.total_seconds)}</dd>
+      <dt>${t("k_analysis")}</dt><dd>${fmtSecs(tm.total_seconds)}</dd>
+      ${w.deleted ? `<dt>${t("k_deletion")}</dt><dd>${fmtSecs(w.deleted.seconds)}</dd>` : ""}
+      <dt>${t("k_network")}</dt><dd>${fmtSecs(roundTrip)}</dd>
+      <dt>${t("k_avg")}</dt><dd>${fmtLocal(tm.avg_ms_per_slide, 2)} ms</dd>
+      <dt>${t("k_speed")}</dt><dd>${fmtLocal(tm.parse_mb_per_second, 1)} MB/s</dd>
+      ${fl.duplicates_by_content ? `<dt>${t("k_prefilter")}</dt><dd>${fmtSecs(tm.est_seconds_saved_by_prefilter)}</dd>` : ""}
     </dl>
-    ${stageRows ? `<h3 class="is-subhead">Tid per steg</h3>${stageRows}` : ""}
-    ${removedRows ? `<h3 class="is-subhead">Avvisade filer (${fmtNum(r.removed.length)})</h3><div class="is-filelist">${removedRows}</div>` : ""}
-    ${(r.hints || []).map(h => `<p class="is-field__hint" style="margin-top:12px">Tips: ${escapeHtml(h)}</p>`).join("")}
+    ${stageRows ? `<h3 class="is-subhead">${t("per_stage")}</h3>${stageRows}` : ""}
+    ${removedRows ? `<h3 class="is-subhead">${t("rejected_files", { n: fmtNum(r.removed.length) })}</h3><div class="is-filelist">${removedRows}</div>` : ""}
+    ${(r.hints || []).map(h => `<p class="is-field__hint" style="margin-top:12px">${t("tip", { hint: escapeHtml(h) })}</p>`).join("")}
   `;
   renderVersionTrees(r.version_trees || []);
 }
@@ -458,9 +464,9 @@ function showFamily(i) {
         formatter: (p) => {
           const d = p.data;
           const e = (fam.edges || []).find(x => x.child === d._id);
-          const change = e ? `${e.relation}: +${e.added} / −${e.removed} sidor`
-                           : (d._selected ? "kom in nu" : "ursprungsversion");
-          return `<b>${escapeHtml(d._full)}</b><br>${d._pages} sidor<br>${(d._date||"").slice(0,10)}<br>${change}`;
+          const change = e ? `${e.relation}: +${e.added} / −${e.removed} pages`
+                           : (d._selected ? "added now" : "original version");
+          return `<b>${escapeHtml(d._full)}</b><br>${d._pages} pages<br>${(d._date||"").slice(0,10)}<br>${change}`;
         },
       },
       series: [{
@@ -489,29 +495,29 @@ function showFamily(i) {
   // besparingar
   const s = fam.savings || {};
   document.getElementById("treeSavings").innerHTML =
-    `Sparat <b>${fmtBytes(s.saved_bytes)}</b> (${(s.saved_percent||0).toFixed(1)} % av ${fmtBytes(s.full_bytes)})`;
+    `Saved <b>${fmtBytes(s.saved_bytes)}</b> (${(s.saved_percent||0).toFixed(1)} % of ${fmtBytes(s.full_bytes)})`;
 
   // klicka en nod i grafen for info + nedladdning (popover)
   document.getElementById("treeDl").innerHTML =
-    `<span class="is-field__hint">Klicka på en version i grafen for att se detaljer och ladda ner den.</span>`;
+    `<span class="is-field__hint">Click a version in the graph to see details and download it.</span>`;
 }
 
 function openNodePopover(fam, d) {
   const pop = document.getElementById("nodePopover");
   if (!pop) return;
   const e = (fam.edges || []).find(x => x.child === d._id);
-  const change = e ? `${e.relation}: +${e.added} / −${e.removed} sidor`
-                   : (d._selected ? "kom in nu" : "ursprungsversion");
+  const change = e ? `${e.relation}: +${e.added} / −${e.removed} pages`
+                   : (d._selected ? "added now" : "original version");
   pop.innerHTML = `
-    <button class="is-pop-close" id="popClose" aria-label="Stäng">×</button>
+    <button class="is-pop-close" id="popClose" aria-label="Close">×</button>
     <div class="is-pop-name">${escapeHtml(d._full)}</div>
     <dl class="is-kv">
-      <dt>Sidor</dt><dd>${fmtNum(d._pages)}</dd>
-      <dt>Datum</dt><dd>${(d._date||"").slice(0,19).replace("T"," ")}</dd>
-      <dt>Ändring</dt><dd>${change}</dd>
-      ${d._selected ? "<dt>Status</dt><dd>Kom in nu</dd>" : ""}
+      <dt>Pages</dt><dd>${fmtNum(d._pages)}</dd>
+      <dt>Date</dt><dd>${(d._date||"").slice(0,19).replace("T"," ")}</dd>
+      <dt>Change</dt><dd>${change}</dd>
+      ${d._selected ? "<dt>Status</dt><dd>Added now</dd>" : ""}
     </dl>
-    <button class="is-btn is-btn--sm" id="popDl">Ladda ner denna version</button>`;
+    <button class="is-btn is-btn--sm" id="popDl">Download this version</button>`;
   pop.hidden = false;
   document.getElementById("popClose").onclick = () => { pop.hidden = true; _clickedId = null; showFamily(_selectedIdx); };
   document.getElementById("popDl").onclick = () => { window.location = `/api/tree/${d._id}/download`; };
@@ -538,6 +544,18 @@ document.getElementById("treeFull").addEventListener("click", () => {
   setTimeout(() => _treeChart && _treeChart.resize(), 150);
 });
 document.addEventListener("fullscreenchange", () => setTimeout(() => _treeChart && _treeChart.resize(), 150));
+/* ---------- Language switch: redo everything built in JS ---------- */
+function setExtHint() {
+  $("#extHint").textContent = extensions ? t("ext_hint_types", { types: extensions.join(", ") })
+                                         : t("ext_hint");
+}
+document.addEventListener("langchange", () => {
+  if (!running) updateRunLabel();
+  setExtHint();
+  refreshTrash();
+  if (pickerFor) setPickerTitle();
+  if (lastReport) renderReport(...lastReport);
+});
 
 /* ---------- Start ---------- */
 async function refreshStore() {
@@ -545,22 +563,22 @@ async function refreshStore() {
   if (!info) return;
   try {
     const s = await storeApi("/status");
-    info.textContent = `${fmtNum(s.documents)} dokument · ${fmtNum(s.pages)} sidor · ${fmtNum(s.images)} bilder sparade.`;
-  } catch (e) { info.textContent = "Kunde inte läsa versionslagret."; }
+    info.textContent = `${fmtNum(s.documents)} documents · ${fmtNum(s.pages)} pages · ${fmtNum(s.images)} images stored.`;
+  } catch (e) { info.textContent = "Could not read the version store."; }
 }
 
 document.getElementById("resetBtn").addEventListener("click", async () => {
   const ok = await askConfirm({
-    title: "Rensa versionslagret?",
-    text: "Detta raderar alla sparade dokument, sidor och bilder i versionslagret (cachen) permanent. Dina riktiga filer påverkas inte.",
-    ok: "Rensa allt",
+    title: "Clear the version store?",
+    text: "This permanently deletes all stored documents, pages and images in the version store (cache). Your real files are not affected.",
+    ok: "Clear everything",
   });
   if (!ok) return;
   try {
     await storeApi("/reset", {});
     await refreshStore();
   } catch (e) {
-    resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>Kunde inte rensa</strong>${escapeHtml(e.message)}</div>`;
+    resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>Could not clear</strong>${escapeHtml(e.message)}</div>`;
   }
 });
 
@@ -570,9 +588,10 @@ document.getElementById("resetBtn").addEventListener("click", async () => {
     const d = await api("/defaults");
     targetInput.value = recall("dedupe.target") || d.target;
     trashInput.value = recall("dedupe.trash") || d.trash;
-    $("#extHint").textContent = `Filtyper: ${d.extensions.join(", ")}. Undermappar tas med.`;
+    extensions = d.extensions;
+    setExtHint();
   } catch (e) {
-    resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>Ingen kontakt</strong>${escapeHtml(e.message)}</div>`;
+    resultBody.innerHTML = `<div class="is-op-card" data-kind="error"><strong>${t("no_contact")}</strong>${escapeHtml(e.message)}</div>`;
   }
   refreshStore();
 })();

@@ -36,7 +36,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
-from notes.meeting_notes import VideoInfo, build_notes
+from notes.meeting_notes import MIN_WORDS, VideoInfo, build_notes
 from notes.summarize import (DEFAULT_MODEL, DEFAULT_URL, Summary, SummaryError,
                              extract_keywords, summarize)
 from video_splitter.splitter import (CAMERA_THRESHOLD, DEFAULT_THRESHOLD, MODES,
@@ -49,6 +49,8 @@ NOTES_DIR = DATA_DIR / "meeting_notes"
 RESOURCES_DIR = DATA_DIR / "resources"
 # audio-only files (no video track): one part of the notes per this many seconds
 AUDIO_PART_SECONDS = 300
+# frames from runs of more than this many frames in a row with no speech are left out
+MAX_SILENT_FRAMES = 3
 
 
 def transcribe_audio(audio: Path, model_name: str, device: str, lang: str | None,
@@ -79,9 +81,11 @@ def transcribe_audio(audio: Path, model_name: str, device: str, lang: str | None
         return run("cpu", "int8")
 
 
-def add_speakers(audio: Path, transcript: Path, num_speakers: int | None = None) -> int:
+def add_speakers(audio: Path, transcript: Path, num_speakers: int | None = None,
+                 device: str = "auto") -> int:
     """Put a speaker label on every transcript line (as transcription.diarize writes them).
 
+    device: "auto" uses the GPU when PyTorch can, "cpu" forces the CPU.
     Returns the number of speakers found. Raises RuntimeError if it can't be done.
     """
     from notes.meeting_notes import read_transcript
@@ -91,8 +95,13 @@ def add_speakers(audio: Path, transcript: Path, num_speakers: int | None = None)
     if not token:
         raise RuntimeError("no Hugging Face token: set HF_TOKEN or create .hf_token "
                            "in the project folder")
-    print("      finding who speaks when (pyannote)...")
-    turns = diarize_turns(audio, token, num_speakers)
+    def report(dev: str, hint: str | None) -> None:
+        print(f"      finding who speaks when (pyannote on {dev})...")
+        if hint:
+            print(f"      note: {hint}", file=sys.stderr)
+
+    turns = diarize_turns(audio, token, num_speakers,
+                          device="cpu" if device == "cpu" else "auto", on_device=report)
     lines = [f"[{s.start:7.2f} -> {s.end:7.2f}] {assign_speaker(s.start, s.end, turns)}: "
              f"{s.text}" for s in read_transcript(transcript)]
     transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -106,7 +115,9 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
                ollama_url: str = DEFAULT_URL, hint: str | None = None,
                resources_dir: Path | None = None, embed_images: bool = False,
                speakers: bool = False, num_speakers: int | None = None,
-               keywords: bool = False) -> Path:
+               keywords: bool = False,
+               max_silent_frames: int | None = MAX_SILENT_FRAMES,
+               min_words: int = MIN_WORDS) -> Path:
     """Write the notes to `output` and return its path.
 
     The frames are moved to <resources_dir>/<video name>/ (default: data/resources) and
@@ -115,6 +126,10 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
     that fails the notes are still written, without speaker labels.
     summary / keywords: let the local model (Ollama) write a summary / search keywords.
     Both are optional; if Ollama fails the notes are still written without them.
+    max_silent_frames: frames from runs of more than this many frames in a row where
+    nobody speaks (or, while shown briefly, fewer than `min_words` words are said) are
+    left out of the notes and not saved; their text moves to the previous kept frame.
+    None = keep every frame.
     """
     if not video.is_file():
         raise FileNotFoundError(video)
@@ -153,7 +168,7 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
                                           batched)
             if speakers:
                 try:
-                    found = add_speakers(split.audio_path, transcript, num_speakers)
+                    found = add_speakers(split.audio_path, transcript, num_speakers, device)
                     labelled = True
                     print(f"      {found} speaker{'s' if found != 1 else ''}")
                 except RuntimeError as exc:
@@ -194,11 +209,27 @@ def make_notes(video: Path, output: Path, *, threshold: float = DEFAULT_THRESHOL
             print(f"      frames -> {frames_dir}")
 
         print("[3/3] writing notes...")
-        return build_notes(work, output=output, title=video.stem.replace("_", " "),
-                           summarizer=summarizer, embed_images=embed_images,
-                           frames_dir=frames_dir, speakers=labelled, video=info,
-                           part_seconds=AUDIO_PART_SECONDS if audio_only else None,
-                           keyworder=keyworder)
+        md = build_notes(work, output=output, title=video.stem.replace("_", " "),
+                         summarizer=summarizer, embed_images=embed_images,
+                         frames_dir=frames_dir, speakers=labelled, video=info,
+                         part_seconds=AUDIO_PART_SECONDS if audio_only else None,
+                         keyworder=keyworder, max_silent_frames=max_silent_frames,
+                         min_words=min_words)
+        if frames_dir is not None:
+            removed = remove_unused_frames(frames_dir, md.read_text(encoding="utf-8"))
+            if removed:
+                print(f"      left out {removed} frames where nobody spoke")
+        return md
+
+
+def remove_unused_frames(frames_dir: Path, notes_text: str) -> int:
+    """Delete the frames the notes don't link to (e.g. silent ones). Returns how many."""
+    removed = 0
+    for frame in frames_dir.glob("frame_*"):
+        if frame.is_file() and frame.name not in notes_text:
+            frame.unlink()
+            removed += 1
+    return removed
 
 
 def save_frames(frames, dest: Path) -> Path:
@@ -241,6 +272,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="label who is speaking (needs pyannote.audio + a Hugging Face token)")
     p.add_argument("--num-speakers", type=int,
                    help="exact number of speakers, if known (better speaker labels)")
+    p.add_argument("--max-silent-frames", type=int, default=MAX_SILENT_FRAMES,
+                   help="leave out frames from runs of more than N frames in a row where "
+                        f"nobody speaks (default: {MAX_SILENT_FRAMES})")
+    p.add_argument("--min-words", type=int, default=MIN_WORDS,
+                   help="a briefly shown frame with fewer words than this counts as "
+                        f"silent (default: {MIN_WORDS})")
+    p.add_argument("--keep-silent-frames", action="store_true",
+                   help="keep every frame, also where nobody speaks")
     p.add_argument("--no-summary", action="store_true", help="skip the Ollama summary")
     p.add_argument("--keywords", action="store_true",
                    help="let the Ollama model add search keywords to the notes")
@@ -261,7 +300,9 @@ def main(argv: list[str] | None = None) -> int:
                         ollama_model=args.model, ollama_url=args.ollama_url, hint=args.hint,
                         resources_dir=args.resources, embed_images=args.embed_images,
                         speakers=args.speakers or bool(args.num_speakers),
-                        num_speakers=args.num_speakers, keywords=args.keywords)
+                        num_speakers=args.num_speakers, keywords=args.keywords,
+                        max_silent_frames=None if args.keep_silent_frames
+                        else args.max_silent_frames, min_words=args.min_words)
     except (FileNotFoundError, ValueError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

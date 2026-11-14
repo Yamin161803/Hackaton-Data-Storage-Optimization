@@ -1,19 +1,19 @@
-"""Hashfunktioner för video: fingeravtryck (storlek + snabb hash + full hash) och video-id.
+"""Hash functions for video: fingerprint (size + quick hash + full hash) and video id.
 
-Fingeravtrycket skrivs först i varje anteckning (data/meeting_notes), så att man kan hitta
-videon från anteckningen och anteckningen från videon (se lookup.py):
+The fingerprint is written at the top of every notes file (data/meeting_notes), so the
+video can be found from the notes and the notes from the video (see lookup.py):
 
-    file_size            filstorlek i byte                  – gratis att jämföra
-    quick_hash           SHA-256 av storlek + första och    – läser bara 2 MiB, snabb
-                         sista 1 MiB (QUICK_HASH_METHOD)
-    full_hash            SHA-256 av hela filen              – exakt, läser hela filen
+    file_size            file size in bytes                 - free to compare
+    quick_hash           SHA-256 of size + first and        - reads only 2 MiB, fast
+                         last 1 MiB (QUICK_HASH_METHOD)
+    full_hash            SHA-256 of the whole file          - exact, reads the whole file
                          (FULL_HASH_ALGORITHM)
 
-Jämför i den ordningen: storlek, sedan snabb hash, och full hash bara för att bekräfta.
+Compare in that order: size, then quick hash, and full hash only to confirm.
 
-Video-id:t är de första 8 byten av en SHA-256 av bara video- och ljuddata (metadata
-ignoreras) som ett 64-bitars heltal, så det passar som INTEGER PRIMARY KEY i SQLite.
-Webbsidan använder det för att känna igen en video som redan har bearbetats.
+The video id is the first 8 bytes of a SHA-256 of only the video and audio data
+(metadata ignored) as a 64-bit integer, so it fits an INTEGER PRIMARY KEY in SQLite.
+Older notes use it to recognise a video that was already processed.
 """
 
 from __future__ import annotations
@@ -24,16 +24,16 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-CHUNK = 1024 * 1024  # läser 1 MB åt gången, så även stora videor går bra
+CHUNK = 1024 * 1024  # read 1 MB at a time, so even big videos are fine
 
-QUICK_HASH_BYTES = 1024 * 1024            # 1 MiB från början och 1 MiB från slutet
+QUICK_HASH_BYTES = 1024 * 1024            # 1 MiB from the start and 1 MiB from the end
 QUICK_HASH_METHOD = "sha256-size-first-last-1MiB"
 FULL_HASH_ALGORITHM = "sha256"
 
 
 @dataclass(frozen=True)
 class Fingerprint:
-    """Det som skrivs först i anteckningarna för att kunna hitta videon igen."""
+    """Written at the top of the notes so the video can be found again."""
     file_size: int
     quick_hash: str
     full_hash: str
@@ -42,21 +42,21 @@ class Fingerprint:
 
 
 def _till_id(digest: bytes) -> int:
-    """De första 8 byten som ett 64-bitars heltal (passar SQLite INTEGER)."""
+    """The first 8 bytes as a 64-bit integer (fits SQLite INTEGER)."""
     return int.from_bytes(digest[:8], "big", signed=True)
 
 
 def _ffmpeg() -> str:
-    """ffmpeg från systemet, annars den som följer med imageio-ffmpeg."""
+    """The system ffmpeg, otherwise the one bundled with imageio-ffmpeg."""
     from video_splitter.splitter import find_ffmpeg
     return find_ffmpeg()
 
 
 def quick_hash(sokvag: str | Path) -> str:
     """
-    Snabb hash (hex): SHA-256 av filstorleken (8 byte) + första 1 MiB + sista 1 MiB.
-    Läser högst 2 MiB oavsett hur stor videon är. Kan i teorin vara lika för två filer
-    som bara skiljer sig i mitten – bekräfta därför med full_hash.
+    Quick hash (hex): SHA-256 of the file size (8 bytes) + first 1 MiB + last 1 MiB.
+    Reads at most 2 MiB however big the video is. Can in theory match for two files
+    that differ only in the middle, so confirm with full_hash.
     """
     storlek = os.path.getsize(sokvag)
     h = hashlib.sha256(storlek.to_bytes(8, "big"))
@@ -69,7 +69,7 @@ def quick_hash(sokvag: str | Path) -> str:
 
 
 def full_hash(sokvag: str | Path) -> str:
-    """Full hash (hex): SHA-256 av hela filen. Samma fil ger alltid samma hash."""
+    """Full hash (hex): SHA-256 of the whole file. The same file always gives the same hash."""
     h = hashlib.new(FULL_HASH_ALGORITHM)
     with open(sokvag, "rb") as f:
         while block := f.read(CHUNK):
@@ -78,43 +78,43 @@ def full_hash(sokvag: str | Path) -> str:
 
 
 def fingerprint(sokvag: str | Path) -> Fingerprint:
-    """Storlek, snabb hash och full hash för en fil."""
+    """Size, quick hash and full hash of a file."""
     return Fingerprint(os.path.getsize(sokvag), quick_hash(sokvag), full_hash(sokvag))
 
 
 def hash_video(sokvag: str | Path) -> int:
     """
-    Hash av hela filen som id. Snabb och exakt: samma fil ger alltid samma id.
-    Ändrad metadata (t.ex. titel inuti MP4-filen) ger ett annat id.
+    Hash of the whole file as an id. Fast and exact: the same file always gives the same
+    id. Changed metadata (e.g. the title inside the MP4 file) gives a different id.
     """
     return _till_id(bytes.fromhex(full_hash(sokvag)))
 
 
 def hash_video_innehall(sokvag: str | Path) -> int:
     """
-    Hash av bara video- och ljuddata, utan metadata.
-    Samma video med olika titel/taggar ger samma id.
-    Kräver ffmpeg (systemets eller imageio-ffmpeg). Videon kodas inte om.
+    Hash of only the video and audio data, without metadata.
+    The same video with a different title/tags gives the same id.
+    Needs ffmpeg (system or imageio-ffmpeg). The video is not re-encoded.
     """
     kommando = [
         _ffmpeg(), "-v", "error",
         "-i", str(sokvag),
-        "-map", "0:v?", "-map", "0:a?",   # bara video- och ljudspår
-        "-map_metadata", "-1",            # ta bort all metadata
-        "-c", "copy",                     # kopiera data utan omkodning
-        "-f", "hash", "-hash", "sha256",  # låt ffmpeg räkna ut hashen
+        "-map", "0:v?", "-map", "0:a?",   # only video and audio streams
+        "-map_metadata", "-1",            # drop all metadata
+        "-c", "copy",                     # copy data without re-encoding
+        "-f", "hash", "-hash", "sha256",  # let ffmpeg compute the hash
         "-",
     ]
     resultat = subprocess.run(kommando, capture_output=True, text=True, check=True)
-    # ffmpeg skriver t.ex. "SHA256=3c8f..."
+    # ffmpeg prints e.g. "SHA256=3c8f..."
     hex_hash = resultat.stdout.strip().split("=", 1)[1]
     return _till_id(bytes.fromhex(hex_hash))
 
 
 def video_id(sokvag: str | Path) -> tuple[int, str]:
     """
-    (id, metod) för en video. metod = "content" (bara video/ljud, metadata ignoreras)
-    eller "file" (hela filen) om ffmpeg inte kunde läsa videon.
+    (id, method) for a video. method = "content" (only video/audio, metadata ignored)
+    or "file" (the whole file) if ffmpeg could not read the video.
     """
     try:
         return hash_video_innehall(sokvag), "content"

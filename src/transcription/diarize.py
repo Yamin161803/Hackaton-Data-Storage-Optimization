@@ -7,7 +7,9 @@ Pipeline:
   3. merge: each transcript segment gets the speaker who overlaps it most
 
 Device auto-detected (CUDA float16 if a GPU is present, else CPU int8) for
-faster-whisper; pyannote uses CUDA if torch sees a GPU, else CPU.
+faster-whisper; pyannote uses CUDA if PyTorch can use the GPU, else the CPU (and says
+so when a GPU is present but PyTorch is a CPU-only build). A failed GPU run (e.g. out
+of memory) is retried on the CPU.
 
 HF token is read from the .hf_token file in the project root (or HF_TOKEN env var).
 The pyannote model is gated: accept its terms once on huggingface.co with that account.
@@ -30,6 +32,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Callable
 
 # torch, soundfile, pyannote and faster-whisper are imported inside the functions that
 # need them: they are slow to import and optional for the rest of the project.
@@ -76,10 +79,46 @@ def assign_speaker(seg_start, seg_end, turns):
     return best
 
 
-def diarize_turns(audio: str | Path, token: str,
-                  num_speakers: int | None = None) -> list[tuple[float, float, str]]:
+TORCH_CUDA_HINT = ("an NVIDIA GPU is present but the installed PyTorch is CPU-only, so "
+                   "speaker detection runs on the CPU. For the GPU install the CUDA build: "
+                   "pip install --force-reinstall torch torchaudio "
+                   "--index-url https://download.pytorch.org/whl/cu126")
+
+
+def nvidia_gpu_present() -> bool:
+    """True when an NVIDIA GPU with a working driver is visible (via CTranslate2)."""
+    try:
+        import ctranslate2
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:  # noqa: BLE001 - not installed / no driver
+        return False
+
+
+def diarize_device(requested: str = "auto") -> tuple[str, str | None]:
+    """(device, hint) for pyannote: "cuda" when PyTorch can use a GPU, else "cpu".
+
+    hint explains why the GPU is not used when there is one, else None.
+    """
+    import torch
+    if requested == "cpu":
+        return "cpu", None
+    if torch.cuda.is_available():
+        return "cuda", None
+    if requested == "cuda":
+        raise RuntimeError("--device cuda asked for, but PyTorch cannot use a GPU")
+    return "cpu", TORCH_CUDA_HINT if nvidia_gpu_present() else None
+
+
+def diarize_turns(audio: str | Path, token: str, num_speakers: int | None = None,
+                  device: str = "auto",
+                  on_device: Callable[[str, str | None], None] | None = None
+                  ) -> list[tuple[float, float, str]]:
     """Who spoke when: [(start, end, "SPEAKER_00"), ...] for an audio file (wav is best).
 
+    device: "auto" (GPU when PyTorch can use one, else CPU), "cuda" or "cpu". If the GPU
+    run fails (e.g. out of memory) it is retried on the CPU.
+    on_device(device, hint): called with the device used and, when a GPU is present but
+    not usable, a hint how to fix that.
     Raises RuntimeError when pyannote isn't installed or the model can't be loaded.
     """
     try:
@@ -94,13 +133,27 @@ def diarize_turns(audio: str | Path, token: str,
     if dia is None:  # older pyannote returns None instead of raising
         raise RuntimeError(f"could not load {DIARIZATION_MODEL}; check the HF token and "
                            "accept the model's terms on huggingface.co")
-    if torch.cuda.is_available():
-        dia.to(torch.device("cuda"))
     # Load audio in-memory via soundfile (avoids torchcodec / CUDA-lib issues).
     data, sr = sf.read(str(audio), dtype="float32", always_2d=True)  # (time, ch)
     waveform = torch.from_numpy(data.T.copy())  # -> (ch, time)
     kwargs = {"num_speakers": num_speakers} if num_speakers else {}
-    diarization = dia({"waveform": waveform, "sample_rate": sr}, **kwargs)
+
+    def run(dev: str):
+        dia.to(torch.device(dev))
+        return dia({"waveform": waveform, "sample_rate": sr}, **kwargs)
+
+    dev, hint = diarize_device(device)
+    if on_device:
+        on_device(dev, hint)
+    try:
+        diarization = run(dev)
+    except (RuntimeError, MemoryError) as exc:
+        if dev != "cuda" or device == "cuda":
+            raise
+        torch.cuda.empty_cache()
+        if on_device:
+            on_device("cpu", f"GPU failed ({str(exc).splitlines()[0][:120]}); using the CPU")
+        diarization = run("cpu")
     # pyannote v4 returns a DiarizeOutput; the Annotation is .speaker_diarization
     annotation = getattr(diarization, "speaker_diarization", diarization)
     return [(seg.start, seg.end, spk)
@@ -140,7 +193,8 @@ def main():
     print(f"[2/3] pyannote diarization ({DIARIZATION_MODEL})")
     t1 = time.time()
     try:
-        turns = diarize_turns(in_path, token, args.num_speakers)
+        turns = diarize_turns(in_path, token, args.num_speakers, on_device=lambda d, hint: print(
+            f"      on {d}" + (f" - note: {hint}" if hint else "")))
     except RuntimeError as exc:
         sys.exit(f"ERROR: {exc}")
     speakers = sorted(set(t[2] for t in turns))

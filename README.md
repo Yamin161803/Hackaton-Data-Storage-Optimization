@@ -16,6 +16,17 @@ what's in them.
 Everything runs locally: speech to text uses faster-whisper (GPU if present, otherwise
 CPU), and summaries and keywords come from a local model through Ollama.
 
+## Quick start
+
+```bash
+python run.py setup     # install
+python run.py check     # what is ready
+python run.py           # menu, or: python run.py web | notes <video> | dedupe <folder>
+```
+
+See [HOW_TO_RUN.md](HOW_TO_RUN.md) for every command. The rest of this README explains
+the tools themselves.
+
 ## Setup
 
 Python 3.10+.
@@ -89,6 +100,14 @@ frame. `--mode auto` (default) detects camera footage (the picture changes almos
 frame) and then uses `--camera-threshold` (default 0.40), so only real scene changes are
 kept. Force it with `--mode presentation` or `--mode camera`.
 
+**Silent frames.** After that, frames shown while nobody speaks are filtered. A frame
+counts as silent when no text ends up under it, or when it has fewer than `--min-words`
+(default 10) words and is on screen under 10 s, e.g. the presenter moving windows
+around. A short pause (up to `--max-silent-frames`, default 3, frames in a row) is
+kept; a longer run is left out of the notes and not saved, and its text moves to the
+previous kept frame, so nothing said is lost. `--keep-silent-frames` turns this off.
+Videos without speech keep all their frames.
+
 Other options: `--whisper-model` (`tiny|base|small|medium|large-v3|distil-large-v3`,
 default `base`), `--device auto|cuda|cpu`, `--batched`, `--model` (Ollama model),
 `--ollama-url`. Run `python src/app.py -h` for the full list.
@@ -134,12 +153,17 @@ The server also saves them in `data/meeting_notes` / `data/resources`. A file th
 already processed (same fingerprint) is returned straight away; if the saved notes lack
 something you asked for, the video is processed again.
 
-**Rensa dubbletter** (`/dedupe`): runs `slide_dedupe` on a folder you pick. It shows
+**Remove duplicates** (`/dedupe`): runs `slide_dedupe` on a folder you pick. It shows
 the run time and how much space removing the rejected files would free. Optionally it
 moves them to a trash folder (default `data/trash`), and, after you confirm, empties
 that folder automatically or on demand. Nothing is deleted if the folder changed since
 you confirmed. Every web run uses a fresh index, so the whole folder is analysed each
 time.
+
+**Language:** the pages are in English; the **EN / SV** switch in the header changes them
+to Swedish (the choice is remembered in the browser). All page text is in
+`src/website/static/i18n.js`, and the server's messages are in `src/website/i18n.py`;
+the page sends its language in the `X-Lang` header.
 
 Server options: `--port` (default 8000, or `$PORT`), `--whisper-model`, and the
 defaults `--no-summary`, `--keywords`, `--speakers`.
@@ -213,6 +237,7 @@ src/
   transcription/      transcribe.py (faster-whisper), diarize.py (pyannote speaker labels)
   notes/              meeting_notes.py (Markdown), summarize.py (Ollama), pdf_to_markdown.py
   dedupe/             slide_dedupe.py (duplicate slide/document cleanup)
+  store/              document store: page-level dedup, versions, shared images, search
   website/            Flask server, dedupe_api.py, static pages
 tests/                pytest tests for all of the above
 data/                 raw/, meeting_notes/, resources/, trash/ (contents git-ignored),
