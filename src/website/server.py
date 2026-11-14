@@ -1,31 +1,31 @@
 """
-Backend för webbsidan: ladda upp en video, få tillbaka anteckningar.
+Backend for the website: upload a video, get notes back.
 
-Innehåller:
-  - URL:en /api/compress som function.js skickar filen till
-  - sidan /dedupe (Rensa dubbletter) med URL:erna i website/dedupe_api.py
-  - ta_emot_fil()     – sparar den uppladdade filen i en tillfällig mapp
-  - komprimera()      – gör anteckningar av videon med samma pipeline som src/app.py
-  - skicka_tillbaka() – skickar anteckningarna tillbaka till webbsidan
+Contains:
+  - the URL /api/compress that function.js sends the file to
+  - the /dedupe page (Rensa dubbletter) with the URLs in website/dedupe_api.py
+  - ta_emot_fil()     - saves the uploaded file in a temporary folder
+  - komprimera()      - makes notes of the video with the same pipeline as src/app.py
+  - skicka_tillbaka() - sends the notes back to the page
 
-En video "komprimeras" till anteckningar: bildrutor + transkribering, och om man vill
-en sammanfattning och sökord (lokal AI-modell via Ollama).
-Servern sparar dem som vanligt i data/meeting_notes och data/resources. Filen som laddas
-ner har bilderna inbakade, så den fungerar på egen hand.
+A video is "compressed" into notes: frames + transcript, and optionally a summary and
+search keywords (local AI model via Ollama).
+The server saves them as usual in data/meeting_notes and data/resources. The downloaded
+file has the frames embedded, so it works on its own.
 
-Anteckningarna börjar med filens fingeravtryck (storlek, snabb hash, full hash; se
-videohash.py). Laddas samma fil upp igen hittas de sparade anteckningarna med det
-(lookup.py) och skickas direkt.
+The notes start with the file's fingerprint (size, quick hash, full hash; see
+videohash.py). When the same file is uploaded again, the saved notes are found with it
+(lookup.py) and sent straight back.
 
-Val på sidan (formulärfält): summary=1/0 (sammanfattning), keywords=1/0 (sökord),
-speakers=1/0 och num_speakers=N (vem som pratar). Saknar de sparade anteckningarna något
-som väljs görs videon om med de nya valen.
+Choices on the page (form fields): summary=1/0, keywords=1/0, speakers=1/0 and
+num_speakers=N (who is speaking). If the saved notes lack something that is chosen, the
+video is processed again with the new choices.
 
-Starta (från projektmappen):
+Start (from the project folder):
     pip install flask
-    python src/website/server.py            # eller: cd src && python -m website
+    python src/website/server.py            # or: cd src && python -m website
     python src/website/server.py --speakers --whisper-model large-v3
-Öppna sedan http://localhost:8000 i webbläsaren.
+Then open http://localhost:8000 in the browser.
 """
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-if __package__ in (None, ""):  # körs som skript: python src/website/server.py
+if __package__ in (None, ""):  # run as a script: python src/website/server.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from urllib.parse import quote  # noqa: E402
@@ -52,23 +52,24 @@ from lookup import notes_for_video  # noqa: E402
 from notes.meeting_notes import (embed_local_images, has_summary,  # noqa: E402
                                  read_front_matter, read_keywords, read_speaker_count)
 from videohash import Fingerprint, fingerprint  # noqa: E402
-from website.dedupe_api import bp as dedupe_bp  # noqa: E402  (sidan Rensa dubbletter)
+from website.dedupe_api import bp as dedupe_bp  # noqa: E402  (the Rensa dubbletter page)
+from website.i18n import msg  # noqa: E402
 
 VIDEO_ENDELSER = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 
-# Mappen där index.html, style.css och function.js ligger
+# Folder with index.html, style.css and function.js
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-# Ska matcha FIELD_NAME och MAX_FILE_MB i function.js
+# Must match FIELD_NAME and MAX_FILE_MB in function.js
 FIELD_NAME = "file"
 MAX_FILE_MB = 2048
 
-# Inställningar för pipelinen; ändras med flaggorna i main().
-# speakers/summary/keywords är förval; sidan väljer själv per video.
+# Pipeline settings; changed with the flags in main().
+# speakers/summary/keywords are defaults; the page chooses per video.
 INSTALLNINGAR: dict = {"speakers": False, "whisper_model": "base", "summary": True,
                        "keywords": False}
 
-# GPU:n klarar en video åt gången
+# The GPU handles one video at a time
 _PIPELINE_LAS = threading.Lock()
 
 app = Flask(__name__, static_folder=None)
@@ -77,41 +78,41 @@ app.register_blueprint(dedupe_bp)
 
 
 # ------------------------------------------------------------------
-# CORS – tillåter sidan även när den öppnas från fil eller annan port
-# (t.ex. Live Server). Byt "*" mot er riktiga adress i produktion.
+# CORS - allows the page even when opened from a file or another port
+# (e.g. Live Server). Replace "*" with your real address in production.
 # ------------------------------------------------------------------
 @app.after_request
 def lagg_till_cors(svar):
     svar.headers["Access-Control-Allow-Origin"] = "*"
     svar.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    svar.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    svar.headers["Access-Control-Allow-Headers"] = "Content-Type, X-Lang"
     svar.headers["Access-Control-Expose-Headers"] = "Content-Disposition, X-File-Id, X-Cached, X-Warning"
     return svar
 
 
 # ------------------------------------------------------------------
-# Hämta filen från webbsidan
+# Receive the file from the page
 # ------------------------------------------------------------------
 def ta_emot_fil(mapp: Path) -> tuple[Path, str]:
-    """Sparar den uppladdade filen i `mapp`. Returnerar (sökväg, originalnamn)."""
+    """Save the uploaded file in `mapp`. Returns (path, original name)."""
     if FIELD_NAME not in request.files:
-        raise ValueError(f"Ingen fil skickades i fältet '{FIELD_NAME}'.")
+        raise ValueError(msg("no_file", field=FIELD_NAME))
 
     uppladdad = request.files[FIELD_NAME]
     if not uppladdad.filename:
-        raise ValueError("Filen saknar namn.")
+        raise ValueError(msg("no_name"))
 
     filnamn = secure_filename(uppladdad.filename) or "video"
     sokvag = mapp / filnamn
-    uppladdad.save(sokvag)  # strömmas till disk, inte hela filen i minnet
+    uppladdad.save(sokvag)  # streamed to disk, not the whole file in memory
     if sokvag.stat().st_size == 0:
-        raise ValueError("Filen är tom.")
+        raise ValueError(msg("empty_file"))
     return sokvag, filnamn
 
 
 @dataclass
 class Val:
-    """Vad som ska finnas i anteckningarna."""
+    """What the notes should contain."""
     summary: bool = True
     keywords: bool = False
     speakers: bool = False
@@ -124,20 +125,20 @@ def _ja(falt: str, standard: bool) -> bool:
 
 
 def las_val() -> Val:
-    """Valen från sidan; fält som saknas får serverns förval (INSTALLNINGAR)."""
+    """The choices from the page; missing fields get the server defaults (INSTALLNINGAR)."""
     val = Val(summary=_ja("summary", INSTALLNINGAR["summary"]),
               keywords=_ja("keywords", INSTALLNINGAR["keywords"]),
               speakers=_ja("speakers", INSTALLNINGAR["speakers"]))
     antal = request.form.get("num_speakers", "").strip()
     if antal:
         if not antal.isdigit() or not 1 <= int(antal) <= 20:
-            raise ValueError("Antal talare ska vara ett heltal mellan 1 och 20.")
+            raise ValueError(msg("bad_speakers"))
         val.speakers, val.num_speakers = True, int(antal)  # ett antal betyder talare
     return val
 
 
 def ledigt_namn(stam: str, fp: Fingerprint) -> str:
-    """Namnet på anteckningarna. Har en annan fil redan samma namn läggs hashen till."""
+    """The notes name. If another file already has this name, the hash is appended."""
     befintlig = pipeline.NOTES_DIR / f"{stam}.md"
     if befintlig.exists() and read_front_matter(befintlig).get("full_hash") != fp.full_hash:
         return f"{stam}_{fp.full_hash[:8]}"
@@ -145,7 +146,7 @@ def ledigt_namn(stam: str, fp: Fingerprint) -> str:
 
 
 def saknas(md: Path, val: Val) -> list[str]:
-    """Det som väljs men saknas i de sparade anteckningarna."""
+    """What is chosen but missing from the saved notes."""
     fattas = []
     if val.summary and not has_summary(md):
         fattas.append("summary")
@@ -159,23 +160,20 @@ def saknas(md: Path, val: Val) -> list[str]:
 
 
 # ------------------------------------------------------------------
-# Videon blir anteckningar
+# The video becomes notes
 # ------------------------------------------------------------------
-_VARNINGAR = {
-    "summary": "Ingen sammanfattning: kontrollera att Ollama körs (ollama serve).",
-    "keywords": "Inga sökord: kontrollera att Ollama körs (ollama serve).",
-    "speakers": "Det gick inte att avgöra vem som pratar. Kontrollera att pyannote.audio "
-                "är installerat och att .hf_token finns i projektmappen.",
-}
+# warning message (website/i18n.py) for each part of the notes that could not be made
+_VARNINGAR = {"summary": "warn_summary", "keywords": "warn_keywords",
+              "speakers": "warn_speakers"}
 
 
 def komprimera(sokvag: Path, fp: Fingerprint, val: Val) -> tuple[bytes, str, bool, str]:
     """
-    Gör anteckningar av videon (eller hittar de sparade för samma fil).
-    Returnerar (anteckningar_med_inbakade_bilder, filnamn, fanns_redan, varning).
+    Make notes of the video (or find the saved ones for the same file).
+    Returns (notes_with_embedded_images, file_name, already_existed, warning).
 
-    Sparade anteckningar används om de har allt som väljs; annars görs videon om och
-    de sparade anteckningarna ersätts.
+    Saved notes are used if they have everything that is chosen; otherwise the video is
+    processed again and the saved notes are replaced.
     """
     hittade = notes_for_video(sokvag, pipeline.NOTES_DIR)
     md = hittade[0] if hittade else None
@@ -186,13 +184,13 @@ def komprimera(sokvag: Path, fp: Fingerprint, val: Val) -> tuple[bytes, str, boo
         md = _gor_anteckningar(sokvag, stam, val)
         fanns_redan = False
 
-    varning = " ".join(_VARNINGAR[k] for k in saknas(md, val))
+    varning = " ".join(msg(_VARNINGAR[k]) for k in saknas(md, val))
     text = embed_local_images(md.read_text(encoding="utf-8"), md.parent)
     return text.encode("utf-8"), md.name, fanns_redan, varning
 
 
 def _gor_anteckningar(sokvag: Path, stam: str, val: Val) -> Path:
-    """Kör pipelinen; anteckningarna sparas som data/meeting_notes/<stam>.md."""
+    """Run the pipeline; the notes are saved as data/meeting_notes/<stam>.md."""
     video = sokvag.with_name(stam + sokvag.suffix)
     if video != sokvag:
         sokvag.rename(video)
@@ -204,11 +202,11 @@ def _gor_anteckningar(sokvag: Path, stam: str, val: Val) -> Path:
 
 
 # ------------------------------------------------------------------
-# Skicka tillbaka anteckningarna
+# Send the notes back
 # ------------------------------------------------------------------
 def skicka_tillbaka(data: bytes, filnamn: str, full_hash: str, fanns_redan: bool,
                     varning: str = ""):
-    """Returnerar filen som nedladdning med filnamn och videons SHA-256."""
+    """Return the file as a download with its file name and the video's SHA-256."""
     svar = send_file(
         io.BytesIO(data),
         mimetype="text/markdown",
@@ -218,12 +216,12 @@ def skicka_tillbaka(data: bytes, filnamn: str, full_hash: str, fanns_redan: bool
     svar.headers["X-File-Id"] = full_hash
     svar.headers["X-Cached"] = "1" if fanns_redan else "0"
     if varning:
-        svar.headers["X-Warning"] = quote(varning)  # URL-kodad: headers tål bara ASCII
+        svar.headers["X-Warning"] = quote(varning)  # URL-encoded: headers only allow ASCII
     return svar
 
 
 # ------------------------------------------------------------------
-# URL:en som function.js anropar (API_URL = "/api/compress")
+# The URL function.js calls (API_URL = "/api/compress")
 # ------------------------------------------------------------------
 @app.route("/api/compress", methods=["POST"])
 def api_compress():
@@ -236,7 +234,7 @@ def api_compress():
 
         if sokvag.suffix.lower() not in VIDEO_ENDELSER:
             tillatna = ", ".join(sorted(VIDEO_ENDELSER))
-            return jsonify(detail=f"Bara videofiler stöds ({tillatna})."), 415
+            return jsonify(detail=msg("video_only", allowed=tillatna)), 415
 
         try:
             val = las_val()
@@ -251,20 +249,20 @@ def api_compress():
             anteckningar, namn, fanns_redan, varning = komprimera(sokvag, fp, val)
         except Exception as fel:  # fel i pipelinen
             app.logger.exception("Anteckningarna kunde inte skapas")
-            return jsonify(detail=f"Anteckningarna kunde inte skapas: {fel}"), 500
+            return jsonify(detail=msg("pipeline_failed", error=fel)), 500
 
         return skicka_tillbaka(anteckningar, namn, fp.full_hash, fanns_redan, varning)
     finally:
-        shutil.rmtree(mapp, ignore_errors=True)  # den uppladdade videon sparas inte
+        shutil.rmtree(mapp, ignore_errors=True)  # the uploaded video is not kept
 
 
 @app.errorhandler(413)
 def for_stor_fil(_):
-    return jsonify(detail=f"Filen är större än {MAX_FILE_MB} MB."), 413
+    return jsonify(detail=msg("too_large", mb=MAX_FILE_MB)), 413
 
 
 # ------------------------------------------------------------------
-# Serverar webbsidan från samma server, så CORS behövs inte
+# Serve the page from the same server, so CORS is not needed
 # ------------------------------------------------------------------
 @app.route("/")
 def index():
@@ -278,27 +276,28 @@ def dedupe_sida():
 
 @app.route("/<path:namn>")
 def statiska_filer(namn):
-    if namn in ("index.html", "style.css", "function.js", "dedupe.html", "dedupe.js"):
+    if namn in ("index.html", "style.css", "function.js", "dedupe.html", "dedupe.js",
+                "i18n.js"):
         return send_from_directory(STATIC_DIR, namn)
-    return jsonify(detail="Hittades inte."), 404
+    return jsonify(detail=msg("not_found")), 404
 
 
 def main(argv: list[str] | None = None) -> None:
-    p = argparse.ArgumentParser(description="Webbsida: video -> anteckningar")
+    p = argparse.ArgumentParser(description="Website: video -> notes")
     p.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8000)))
     p.add_argument("--speakers", action="store_true",
-                   help="förvalt: märk vem som pratar (kan ändras på sidan; kräver "
-                        "pyannote.audio + Hugging Face-token)")
+                   help="default: label who is speaking (can be changed on the page; needs "
+                        "pyannote.audio + a Hugging Face token)")
     p.add_argument("--whisper-model", default="base",
                    help="tiny|base|small|medium|large-v3 (default: base)")
     p.add_argument("--no-summary", action="store_true",
-                   help="förvalt: ingen sammanfattning (kan ändras på sidan)")
+                   help="default: no summary (can be changed on the page)")
     p.add_argument("--keywords", action="store_true",
-                   help="förvalt: lägg till sökord (kan ändras på sidan)")
+                   help="default: add search keywords (can be changed on the page)")
     args = p.parse_args(argv)
     INSTALLNINGAR.update(speakers=args.speakers, whisper_model=args.whisper_model,
                          summary=not args.no_summary, keywords=args.keywords)
-    # debug=False: omstarten i debug-läge laddar om under långa körningar
+    # debug=False: the debug-mode reloader would restart during long runs
     app.run(host="127.0.0.1", port=args.port, debug=False, threaded=True)
 
 

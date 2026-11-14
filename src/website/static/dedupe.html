@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="sv">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Rensa dubbletter</title>
+<title data-i18n="dedupe_title">Remove duplicates</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
@@ -13,24 +13,28 @@
 
 <header class="is-header">
   <div class="is-header__inner">
-    <a class="is-home" href="index.html" aria-label="Videoanteckningar, startsida">
+    <a class="is-home" href="index.html" data-i18n-attr="aria-label:home_aria">
       <svg class="is-logo" viewBox="0 0 44 44" aria-hidden="true">
         <rect x="6" y="6" width="32" height="32" rx="9" fill="none" stroke="#000" stroke-width="3"/>
         <path d="M14 18h16M17 22h10M20 26h4" stroke="#000" stroke-width="3" stroke-linecap="round"/>
       </svg>
       <span class="is-divider" aria-hidden="true"></span>
       <span>
-        <span class="is-header__title">Rensa dubbletter</span><br>
-        <span class="is-header__sub">Behåll varje unik bild, släng resten</span>
+        <span class="is-header__title" data-i18n="dedupe_title">Remove duplicates</span><br>
+        <span class="is-header__sub" data-i18n="d_sub">Keep every unique slide, drop the rest</span>
       </span>
     </a>
-    <nav class="is-tabs" aria-label="Sidor">
-      <a class="is-tab" href="index.html">Videoanteckningar</a>
-      <a class="is-tab" href="dedupe.html" aria-current="page">Rensa dubbletter</a>
+    <nav class="is-tabs" data-i18n-attr="aria-label:pages_aria">
+      <a class="is-tab" href="index.html" data-i18n="app_title">Video notes</a>
+      <a class="is-tab" href="dedupe.html" aria-current="page" data-i18n="dedupe_title">Remove duplicates</a>
     </nav>
     <span class="is-header__spacer"></span>
     <span class="is-header-chip" id="apiChip">Backend: <span class="is-mono"></span></span>
-    <button class="is-theme-btn" id="themeBtn" type="button" aria-label="Växla mörkt läge">
+    <div class="is-lang" role="group" data-i18n-attr="aria-label:lang_aria">
+      <button type="button" data-lang="en" lang="en" aria-pressed="true">EN</button>
+      <button type="button" data-lang="sv" lang="sv" aria-pressed="false">SV</button>
+    </div>
+    <button class="is-theme-btn" id="themeBtn" type="button" data-i18n-attr="aria-label:theme_aria">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
     </button>
   </div>
@@ -38,45 +42,45 @@
 
 <main>
   <section class="is-hero anim">
-    <h1>Rensa bort dubbletter</h1>
-    <p>Välj en mapp med PDF-, PowerPoint- och bildfiler. Filer vars alla bilder redan finns i andra filer behövs inte och kan flyttas bort, utan att någon unik bild försvinner.</p>
-    <ol class="is-steps" aria-label="Förlopp">
-      <li class="is-step is-active" data-step="1"><span class="is-step__n">1</span>Välj mapp</li>
-      <li class="is-step" data-step="2"><span class="is-step__n">2</span>Analysera</li>
-      <li class="is-step" data-step="3"><span class="is-step__n">3</span>Rensa</li>
+    <h1 data-i18n="d_hero_h1">Remove duplicates</h1>
+    <p data-i18n="d_hero_p"></p>
+    <ol class="is-steps" data-i18n-attr="aria-label:steps_aria">
+      <li class="is-step is-active" data-step="1"><span class="is-step__n">1</span><span data-i18n="d_step_choose"></span></li>
+      <li class="is-step" data-step="2"><span class="is-step__n">2</span><span data-i18n="d_step_analyse"></span></li>
+      <li class="is-step" data-step="3"><span class="is-step__n">3</span><span data-i18n="d_step_clean"></span></li>
     </ol>
   </section>
 
   <div class="grid-2">
-    <!-- Inställningar -->
+    <!-- Settings -->
     <section class="is-card anim anim-2" aria-labelledby="settingsTitle">
       <h2 class="is-section-title" id="settingsTitle">
         <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>
-        Mappar
+        <span data-i18n="folders"></span>
       </h2>
 
       <div class="is-field is-field--first">
-        <label class="is-field__label" for="targetInput">Mapp att rensa</label>
+        <label class="is-field__label" for="targetInput" data-i18n="target_label"></label>
         <div class="is-field__row">
           <input class="is-input" id="targetInput" type="text" spellcheck="false" autocomplete="off">
-          <button class="is-btn is-btn--ghost is-btn--sm" type="button" data-browse="targetInput">Bläddra…</button>
+          <button class="is-btn is-btn--ghost is-btn--sm" type="button" data-browse="targetInput" data-i18n="browse"></button>
         </div>
-        <p class="is-field__hint" id="extHint">Undermappar tas med.</p>
+        <p class="is-field__hint" id="extHint" data-i18n="ext_hint"></p>
       </div>
 
       <label class="is-switch">
         <input type="checkbox" id="moveInput">
         <span class="is-switch__track" aria-hidden="true"></span>
-        <span class="is-switch__text">Flytta avvisade filer till en papperskorg
-          <small>Av: bara en rapport, inga filer rörs.</small></span>
+        <span class="is-switch__text"><span data-i18n="move_label"></span>
+          <small data-i18n="move_small"></small></span>
       </label>
 
       <div class="is-sub" id="trashBox" hidden>
         <div class="is-field is-field--first">
-          <label class="is-field__label" for="trashInput">Papperskorg (utmapp)</label>
+          <label class="is-field__label" for="trashInput" data-i18n="trash_label"></label>
           <div class="is-field__row">
             <input class="is-input" id="trashInput" type="text" spellcheck="false" autocomplete="off">
-            <button class="is-btn is-btn--ghost is-btn--sm" type="button" data-browse="trashInput">Bläddra…</button>
+            <button class="is-btn is-btn--ghost is-btn--sm" type="button" data-browse="trashInput" data-i18n="browse"></button>
           </div>
           <p class="is-field__hint" id="trashInfo">&nbsp;</p>
         </div>
@@ -84,87 +88,88 @@
         <label class="is-switch is-switch--danger">
           <input type="checkbox" id="autoDeleteInput">
           <span class="is-switch__track" aria-hidden="true"></span>
-          <span class="is-switch__text">Radera avvisade filer automatiskt
-            <small>Töm papperskorgen permanent efter varje rensning. Av som standard.</small></span>
+          <span class="is-switch__text"><span data-i18n="auto_label"></span>
+            <small data-i18n="auto_small"></small></span>
         </label>
 
         <div class="is-actions">
-          <button class="is-btn is-btn--ghost is-btn--danger is-btn--sm" id="emptyBtn" type="button">Töm papperskorgen…</button>
+          <button class="is-btn is-btn--ghost is-btn--danger is-btn--sm" id="emptyBtn" type="button" data-i18n="empty_btn"></button>
         </div>
       </div>
 
       <div class="is-field">
-        <span class="is-field__label" id="modeLabel">Läge</span>
+        <span class="is-field__label" id="modeLabel" data-i18n="mode"></span>
         <div class="is-seg" role="group" aria-labelledby="modeLabel">
-          <button type="button" data-mode="batch" aria-pressed="true">Batch: minsta samlingen</button>
-          <button type="button" data-mode="online" aria-pressed="false">Online: i filordning</button>
+          <button type="button" data-mode="batch" aria-pressed="true" data-i18n="mode_batch"></button>
+          <button type="button" data-mode="online" aria-pressed="false" data-i18n="mode_online"></button>
         </div>
       </div>
 
       <label class="is-switch">
         <input type="checkbox" id="fastImagesInput">
         <span class="is-switch__track" aria-hidden="true"></span>
-        <span class="is-switch__text">Snabba bilder (PDF)
-          <small>Jämför komprimerade bilddata. Snabbare på bildtunga PDF:er.</small></span>
+        <span class="is-switch__text"><span data-i18n="fast_label"></span>
+          <small data-i18n="fast_small"></small></span>
       </label>
 
       <div class="is-actions">
-        <button class="is-btn" id="runBtn" type="button">Analysera</button>
+        <button class="is-btn" id="runBtn" type="button"></button>
       </div>
     </section>
 
-    <!-- Resultat -->
+    <!-- Results -->
     <section class="is-card is-lift anim anim-3" aria-labelledby="resultTitle" aria-live="polite">
       <h2 class="is-section-title" id="resultTitle">
         <span class="is-icon-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg></span>
-        Resultat
+        <span data-i18n="results"></span>
       </h2>
       <div id="resultBody">
-        <p class="is-placeholder">Välj en mapp och tryck på Analysera. Du ser hur lång tid det tog och hur mycket utrymme som frigörs om de avvisade filerna raderas.</p>
+        <p class="is-placeholder" data-i18n="d_placeholder"></p>
       </div>
     </section>
   </div>
 </main>
 
-<!-- Bekräfta radering -->
+<!-- Confirm deletion -->
 <dialog class="is-dialog" id="confirmDialog" aria-labelledby="confirmTitle">
   <form method="dialog">
     <div class="is-dialog__body">
       <h3 id="confirmTitle"></h3>
       <p id="confirmText"></p>
       <dl class="is-dialog__facts">
-        <dt>Mapp</dt><dd id="confirmFolder"></dd>
-        <dt>Filer</dt><dd id="confirmFiles"></dd>
-        <dt>Storlek</dt><dd id="confirmSize"></dd>
+        <dt data-i18n="c_folder"></dt><dd id="confirmFolder"></dd>
+        <dt data-i18n="c_files"></dt><dd id="confirmFiles"></dd>
+        <dt data-i18n="c_size"></dt><dd id="confirmSize"></dd>
       </dl>
       <p class="is-field__hint is-mono" id="confirmPath"></p>
     </div>
     <div class="is-dialog__actions">
-      <button class="is-btn is-btn--ghost" value="cancel" autofocus>Avbryt</button>
+      <button class="is-btn is-btn--ghost" value="cancel" autofocus data-i18n="cancel"></button>
       <button class="is-btn is-btn--danger" value="ok" id="confirmOk"></button>
     </div>
   </form>
 </dialog>
 
-<!-- Mappväljare -->
+<!-- Folder picker -->
 <dialog class="is-dialog is-picker" id="pickerDialog" aria-labelledby="pickerTitle">
   <div class="is-dialog__body">
-    <h3 id="pickerTitle">Välj mapp</h3>
+    <h3 id="pickerTitle"></h3>
     <div class="is-field__row">
-      <button class="is-btn is-btn--ghost is-btn--sm" type="button" id="pickerUp" aria-label="Upp en nivå">↑ Upp</button>
-      <input class="is-input" id="pickerPath" type="text" spellcheck="false" aria-label="Sökväg">
-      <button class="is-btn is-btn--ghost is-btn--sm" type="button" id="pickerGo">Gå</button>
+      <button class="is-btn is-btn--ghost is-btn--sm" type="button" id="pickerUp" data-i18n="up" data-i18n-attr="aria-label:up_aria"></button>
+      <input class="is-input" id="pickerPath" type="text" spellcheck="false" data-i18n-attr="aria-label:path_aria">
+      <button class="is-btn is-btn--ghost is-btn--sm" type="button" id="pickerGo" data-i18n="go"></button>
     </div>
     <div class="is-picker__chips" id="pickerChips"></div>
     <div class="is-picker__list" id="pickerList" role="list"></div>
     <p class="is-field__hint" id="pickerHint" style="margin-top:10px"></p>
   </div>
   <div class="is-dialog__actions">
-    <button class="is-btn is-btn--ghost" type="button" id="pickerCancel">Avbryt</button>
-    <button class="is-btn" type="button" id="pickerChoose">Välj denna mapp</button>
+    <button class="is-btn is-btn--ghost" type="button" id="pickerCancel" data-i18n="cancel"></button>
+    <button class="is-btn" type="button" id="pickerChoose" data-i18n="choose_this"></button>
   </div>
 </dialog>
 
+<script src="i18n.js" defer></script>
 <script src="dedupe.js" defer></script>
 </body>
 </html>

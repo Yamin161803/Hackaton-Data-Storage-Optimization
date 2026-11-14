@@ -153,12 +153,17 @@ The server also saves them in `data/meeting_notes` / `data/resources`. A file th
 already processed (same fingerprint) is returned straight away; if the saved notes lack
 something you asked for, the video is processed again.
 
-**Rensa dubbletter** (`/dedupe`): runs `slide_dedupe` on a folder you pick. It shows
+**Remove duplicates** (`/dedupe`): runs `slide_dedupe` on a folder you pick. It shows
 the run time and how much space removing the rejected files would free. Optionally it
 moves them to a trash folder (default `data/trash`), and, after you confirm, empties
 that folder automatically or on demand. Nothing is deleted if the folder changed since
 you confirmed. Every web run uses a fresh index, so the whole folder is analysed each
 time.
+
+**Language:** the pages are in English; the **EN / SV** switch in the header changes them
+to Swedish (the choice is remembered in the browser). All page text is in
+`src/website/static/i18n.js`, and the server's messages are in `src/website/i18n.py`;
+the page sends its language in the `X-Lang` header.
 
 Server options: `--port` (default 8000, or `$PORT`), `--whisper-model`, and the
 defaults `--no-summary`, `--keywords`, `--speakers`.

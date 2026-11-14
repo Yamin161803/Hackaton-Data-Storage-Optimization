@@ -1,19 +1,21 @@
 """
-Backend för sidan "Rensa dubbletter" (dedupe.html): kör src/dedupe/slide_dedupe.py på en
-mapp och flyttar (och om man vill raderar) filerna som inte behövs.
+Backend for the "Rensa dubbletter" (remove duplicates) page, dedupe.html: runs
+src/dedupe/slide_dedupe.py on a folder and moves (and optionally deletes) the files that
+are not needed.
 
-URL:er:
-  GET  /api/dedupe/browse?path=...   mappar att välja bland (mappväljaren på sidan)
-  GET  /api/dedupe/trash?path=...    antal filer och storlek i papperskorgsmappen
-  POST /api/dedupe/run               kör rensningen, svarar med rapporten (tid, utrymme)
-  POST /api/dedupe/empty             tömmer papperskorgsmappen
+URLs:
+  GET  /api/dedupe/defaults          default folders and supported file types
+  GET  /api/dedupe/browse?path=...   folders to choose from (the folder picker on the page)
+  GET  /api/dedupe/trash?path=...    number of files and size of the trash folder
+  POST /api/dedupe/run               runs the cleanup, answers with the report (time, space)
+  POST /api/dedupe/empty             empties the trash folder
 
-Radering kräver att sidan skickar med det antal filer och den storlek som användaren
-godkände. Har mappens innehåll ändrats sedan dess raderas inget (svar 409), så det som
-raderas är alltid det som visades i frågan.
+Deleting requires the page to send the number of files and the size the user approved.
+If the folder's contents changed since then, nothing is deleted (status 409), so what
+gets deleted is always what was shown in the confirmation.
 
-Varje körning använder ett nytt, tillfälligt index: mappen analyseras alltid i sin helhet,
-så en provkörning följd av en riktig körning ger samma resultat.
+Every run uses a new, temporary index: the folder is always analysed in full, so a dry
+run followed by a real run gives the same result.
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ from types import SimpleNamespace
 from flask import Blueprint, jsonify, request
 
 from dedupe.slide_dedupe import SUPPORTED, analyze, collect_files
+from website.i18n import msg
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_DIR / "data"
@@ -36,11 +39,11 @@ DEFAULT_TARGET = DATA_DIR / "raw"
 DEFAULT_TRASH = DATA_DIR / "trash"
 
 bp = Blueprint("dedupe", __name__)
-_KOR_LAS = threading.Lock()  # en rensning åt gången
+_KOR_LAS = threading.Lock()  # one cleanup at a time
 
 
 class Fel(Exception):
-    """Fel som visas för användaren, med HTTP-status."""
+    """An error shown to the user, with an HTTP status."""
 
     def __init__(self, text: str, status: int = 400, **extra):
         super().__init__(text)
@@ -53,20 +56,20 @@ def _visa_fel(fel: Fel):
 
 
 # ------------------------------------------------------------------
-# Sökvägar och säkerhet
+# Paths and safety
 # ------------------------------------------------------------------
 def _mapp(text: str | None, standard: Path | None = None, ska_finnas: bool = True) -> Path:
     text = (text or "").strip().strip('"')
     if not text:
         if standard is None:
-            raise Fel("Ingen mapp angiven.")
+            raise Fel(msg("no_folder"))
         return standard.resolve()
     p = Path(os.path.expandvars(os.path.expanduser(text)))
     if not p.is_absolute():
         p = PROJECT_DIR / p
     p = p.resolve()
     if ska_finnas and not p.is_dir():
-        raise Fel(f"Mappen finns inte: {p}", 404)
+        raise Fel(msg("folder_missing", path=p), 404)
     return p
 
 
@@ -75,17 +78,17 @@ def _inuti(barn: Path, foralder: Path) -> bool:
 
 
 def _kontrollera_papperskorg(trash: Path, target: Path | None = None) -> None:
-    """Stoppar mappar som aldrig får tömmas: rotkataloger, hemkatalogen, projektet m.m."""
+    """Refuse folders that must never be emptied: drive roots, the home folder, the project, etc."""
     skyddade = {Path(trash.anchor), Path.home().resolve(), PROJECT_DIR, DATA_DIR,
                 PROJECT_DIR / "src", PROJECT_DIR / "tests", PROJECT_DIR / "docs"}
     if trash in skyddade or _inuti(PROJECT_DIR, trash) or _inuti(Path.home().resolve(), trash):
-        raise Fel(f"Mappen {trash} kan inte användas som papperskorg.")
+        raise Fel(msg("bad_trash", path=trash))
     if target is not None and _inuti(target, trash):
-        raise Fel("Papperskorgen får inte vara mappen som rensas eller en mapp ovanför den.")
+        raise Fel(msg("trash_inside_target"))
 
 
 def _innehall(mapp: Path) -> tuple[int, int]:
-    """(antal filer, total storlek i byte), alla undermappar inräknade."""
+    """(number of files, total size in bytes), all subfolders included."""
     antal = storlek = 0
     if mapp.is_dir():
         for f in mapp.rglob("*"):
@@ -102,18 +105,18 @@ def _info(mapp: Path) -> dict:
 
 
 def _godkant(mapp: Path, data: dict) -> None:
-    """Innehållet ska vara exakt det användaren godkände i frågan."""
+    """The contents must be exactly what the user approved in the confirmation."""
     nu = _info(mapp)
     try:
         godkant = (int(data["files"]), int(data["bytes"]))
     except (KeyError, TypeError, ValueError):
-        raise Fel("Radering måste bekräftas.", 400, trash=nu) from None
+        raise Fel(msg("confirm_delete"), 400, trash=nu) from None
     if godkant != (nu["files"], nu["bytes"]):
-        raise Fel("Papperskorgen har ändrats sedan du bekräftade. Bekräfta igen.", 409, trash=nu)
+        raise Fel(msg("trash_changed"), 409, trash=nu)
 
 
 def _tom(mapp: Path) -> tuple[int, int]:
-    """Raderar allt i mappen (men inte mappen). Returnerar (antal filer, byte)."""
+    """Delete everything in the folder (but not the folder). Returns (files, bytes)."""
     antal = storlek = 0
     for f in sorted(mapp.rglob("*"), key=lambda p: len(p.parts), reverse=True):
         if f.is_symlink() or f.is_file():
@@ -122,12 +125,12 @@ def _tom(mapp: Path) -> tuple[int, int]:
                 storlek += f.stat().st_size
             f.unlink()
         elif f.is_dir():
-            f.rmdir()  # tom nu, innehållet togs bort först
+            f.rmdir()  # empty now, its contents were removed first
     return antal, storlek
 
 
 # ------------------------------------------------------------------
-# URL:er
+# URLs
 # ------------------------------------------------------------------
 @bp.route("/api/dedupe/defaults")
 def standardval():
@@ -149,20 +152,20 @@ def bladdra():
             if d.is_dir() and not d.name.startswith((".", "$")):
                 mappar.append({"name": d.name, "path": str(d)})
     except PermissionError:
-        raise Fel(f"Ingen behörighet att läsa {mapp}.", 403) from None
+        raise Fel(msg("no_permission", path=mapp), 403) from None
     filer = sum(1 for f in mapp.iterdir() if f.is_file() and f.suffix.lower() in SUPPORTED)
     rotter = ([f"{b}:\\" for b in string.ascii_uppercase if os.path.isdir(f"{b}:\\")]
               if os.name == "nt" else ["/"])
     return jsonify(path=str(mapp), parent=str(mapp.parent) if mapp.parent != mapp else None,
                    dirs=mappar, supported_files_here=filer, roots=rotter,
                    shortcuts=[{"name": "data", "path": str(DATA_DIR)},
-                              {"name": "Hem", "path": str(Path.home())}])
+                              {"name": msg("home"), "path": str(Path.home())}])
 
 
 @bp.route("/api/dedupe/trash")
 def papperskorg():
     trash = _mapp(request.args.get("path"), DEFAULT_TRASH, ska_finnas=False)
-    _kontrollera_papperskorg(trash)  # också för att inte räkna igenom t.ex. hela hemkatalogen
+    _kontrollera_papperskorg(trash)  # also avoids counting through e.g. the whole home folder
     return jsonify(_info(trash))
 
 
@@ -185,7 +188,7 @@ def kor():
     radera = flytta and bool(data.get("auto_delete"))
     mode = data.get("mode", "batch")
     if mode not in ("batch", "online"):
-        raise Fel("Läget ska vara 'batch' eller 'online'.")
+        raise Fel(msg("bad_mode"))
 
     trash = None
     if flytta:
@@ -193,7 +196,7 @@ def kor():
         _kontrollera_papperskorg(trash, target)
 
     if not _KOR_LAS.acquire(blocking=False):
-        raise Fel("En rensning pågår redan. Vänta tills den är klar.", 409)
+        raise Fel(msg("busy"), 409)
     try:
         if radera:
             _godkant(trash, data.get("confirm") or {})
@@ -206,7 +209,7 @@ def _kor_rensning(target: Path, trash: Path | None, radera: bool, mode: str,
                   fast_images: bool) -> dict:
     t0 = time.perf_counter()
     filer = [f for f in collect_files([str(target)])
-             if trash is None or not _inuti(f.resolve(), trash)]  # inte det som redan slängts
+             if trash is None or not _inuti(f.resolve(), trash)]  # not what is already in the trash
     with tempfile.TemporaryDirectory(prefix="dedupe_") as tmp:
         args = SimpleNamespace(
             inputs=[str(f) for f in filer], index=str(Path(tmp) / "index.json"), mode=mode,
@@ -214,7 +217,7 @@ def _kor_rensning(target: Path, trash: Path | None, radera: bool, mode: str,
             fast_images=fast_images, no_prefilter=False, workers=1, report_json=None,
             profile=None, snakeviz=False, top=10, quiet=True)
         report, _, _ = (analyze(args) if filer else (_tom_rapport(mode, args.trash), None, None))
-    report = json.loads(json.dumps(report))  # bara JSON-typer (inga Path/set)
+    report = json.loads(json.dumps(report))  # only JSON types (no Path/set)
 
     raderat = None
     if radera and trash is not None and trash.is_dir():
@@ -232,7 +235,7 @@ def _kor_rensning(target: Path, trash: Path | None, radera: bool, mode: str,
 
 
 def _tom_rapport(mode: str, trash: str | None) -> dict:
-    """Rapporten när mappen saknar PDF/PPTX/bilder."""
+    """The report when the folder has no PDF/PPTX/image files."""
     return {
         "settings": {"mode": mode, "trash": trash},
         "files": {"found": 0, "already_indexed": 0, "new": 0, "duplicates_by_content": 0,
