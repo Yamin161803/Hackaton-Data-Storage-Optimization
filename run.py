@@ -77,6 +77,20 @@ def _gpu() -> str:
     return f"yes ({n} CUDA device{'s' if n != 1 else ''})" if n else "no (CPU will be used)"
 
 
+def _speaker_device() -> str:
+    """Where pyannote (speaker labels) runs: needs a CUDA build of PyTorch for the GPU."""
+    try:
+        import torch
+    except ImportError:
+        return "PyTorch not installed"
+    if torch.cuda.is_available():
+        return f"GPU ({torch.cuda.get_device_name(0)})"
+    if "no (" not in _gpu():
+        return ("CPU - PyTorch is a CPU-only build; for the GPU see HOW_TO_RUN.md "
+                "(\"GPU for speaker labels\")")
+    return "CPU"
+
+
 def cmd_check(_extra: list[str]) -> int:
     ok = "OK     "
     no = "MISSING"
@@ -99,7 +113,9 @@ def cmd_check(_extra: list[str]) -> int:
         mark = ok if good else (no if required else opt)
         missing += (not good and required)
         print(f"  [{mark}] {text}")
-    print(f"  [info   ] GPU: {_gpu()}")
+    print(f"  [info   ] GPU for transcription: {_gpu()}")
+    if _has("pyannote.audio") or _has("pyannote"):
+        print(f"  [info   ] speaker labels run on: {_speaker_device()}")
     print("\nRequired parts missing: run  python run.py setup" if missing
           else "\nReady. Rows marked -- are optional.")
     return 1 if missing else 0

@@ -202,6 +202,90 @@ def test_diarize_turns_without_pyannote_says_what_to_install(diarize, monkeypatc
         diarize.diarize_turns(tmp_path / "a.wav", "token")
 
 
+def _fake_pyannote(monkeypatch, cuda: bool = False, gpu_fails: bool = False):
+    """Fake torch / soundfile / pyannote. Returns the dict of calls the pipeline gets."""
+    np = pytest.importorskip("numpy")
+    calls = {"devices": []}
+
+    class Turn:
+        def __init__(self, start, end):
+            self.start, self.end = start, end
+
+    class Annotation:
+        def itertracks(self, yield_label):
+            yield Turn(0.0, 2.0), "t1", "SPEAKER_00"
+
+    class FakePipeline:
+        device = None
+
+        @staticmethod
+        def from_pretrained(name, token):
+            return FakePipeline()
+
+        def to(self, device):
+            self.device = device
+            calls["devices"].append(device)
+
+        def __call__(self, audio, **kwargs):
+            if gpu_fails and self.device == "cuda":
+                raise RuntimeError("CUDA out of memory. Tried to allocate 2 GiB")
+            return types.SimpleNamespace(speaker_diarization=Annotation())
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: cuda, empty_cache=lambda: None),
+        device=lambda d: d, from_numpy=lambda a: a)
+    fake_sf = types.SimpleNamespace(
+        read=lambda path, dtype, always_2d: (np.zeros((16000, 1), dtype="float32"), 16000))
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+    monkeypatch.setitem(sys.modules, "pyannote", types.ModuleType("pyannote"))
+    monkeypatch.setitem(sys.modules, "pyannote.audio", types.SimpleNamespace(Pipeline=FakePipeline))
+    return calls
+
+
+def test_diarize_runs_on_gpu_when_pytorch_can(diarize, monkeypatch, tmp_path):
+    calls = _fake_pyannote(monkeypatch, cuda=True)
+    seen = []
+    turns = diarize.diarize_turns(tmp_path / "a.wav", "tok",
+                                  on_device=lambda d, hint: seen.append((d, hint)))
+    assert turns == [(0.0, 2.0, "SPEAKER_00")]
+    assert calls["devices"] == ["cuda"] and seen == [("cuda", None)]
+
+
+def test_diarize_falls_back_to_cpu_when_the_gpu_fails(diarize, monkeypatch, tmp_path):
+    calls = _fake_pyannote(monkeypatch, cuda=True, gpu_fails=True)
+    seen = []
+    turns = diarize.diarize_turns(tmp_path / "a.wav", "tok",
+                                  on_device=lambda d, hint: seen.append((d, hint)))
+    assert turns == [(0.0, 2.0, "SPEAKER_00")]
+    assert calls["devices"] == ["cuda", "cpu"]
+    assert seen[-1][0] == "cpu" and "out of memory" in seen[-1][1]
+
+
+def test_diarize_forced_gpu_does_not_fall_back(diarize, monkeypatch, tmp_path):
+    _fake_pyannote(monkeypatch, cuda=True, gpu_fails=True)
+    with pytest.raises(RuntimeError, match="out of memory"):
+        diarize.diarize_turns(tmp_path / "a.wav", "tok", device="cuda")
+
+
+def test_diarize_forced_cpu(diarize, monkeypatch, tmp_path):
+    calls = _fake_pyannote(monkeypatch, cuda=True)
+    diarize.diarize_turns(tmp_path / "a.wav", "tok", device="cpu")
+    assert calls["devices"] == ["cpu"]
+
+
+def test_diarize_hint_when_gpu_present_but_pytorch_is_cpu_only(diarize, monkeypatch, tmp_path):
+    _fake_pyannote(monkeypatch, cuda=False)
+    monkeypatch.setattr(diarize, "nvidia_gpu_present", lambda: True)
+    seen = []
+    diarize.diarize_turns(tmp_path / "a.wav", "tok", on_device=lambda d, h: seen.append((d, h)))
+    assert seen[0][0] == "cpu" and "CPU-only" in seen[0][1] and "cu126" in seen[0][1]
+    monkeypatch.setattr(diarize, "nvidia_gpu_present", lambda: False)
+    seen.clear()
+    diarize.diarize_turns(tmp_path / "a.wav", "tok", on_device=lambda d, h: seen.append((d, h)))
+    assert seen == [("cpu", None)]                    # no GPU at all: nothing to fix
+
+
 def test_diarize_turns_with_fake_pipeline(diarize, monkeypatch, tmp_path):
     np = pytest.importorskip("numpy")
     calls = {}
@@ -247,4 +331,4 @@ def test_diarize_turns_with_fake_pipeline(diarize, monkeypatch, tmp_path):
     assert calls["load"] == (diarize.DIARIZATION_MODEL, "tok")
     assert calls["audio"] == ((2, 16000), 16000)      # (channels, samples)
     assert calls["kwargs"] == {"num_speakers": 2}
-    assert "device" not in calls                       # no GPU -> stays on CPU
+    assert calls["device"] == "cpu"                    # no GPU -> runs on the CPU
