@@ -101,17 +101,44 @@ _SHOWINFO_RE = re.compile(r"\bn:\s*(\d+)\s+pts:\s*-?\d+\s+pts_time:(-?[\d.]+)")
 
 
 def find_ffmpeg() -> str:
-    """Use a system ffmpeg if present, otherwise the one bundled with imageio-ffmpeg."""
+    """Use a system ffmpeg if it's new enough (supports -fps_mode, i.e. >= 5.1),
+    otherwise fall back to the one bundled with imageio-ffmpeg.
+
+    The pipeline uses `-fps_mode` (added in ffmpeg 5.1). An older system ffmpeg
+    (e.g. 4.x) rejects it with 'Unrecognized option fps_mode', so we only use
+    the system binary when it actually supports the options we pass."""
     system = shutil.which("ffmpeg")
-    if system:
+    if system and _ffmpeg_supports_fps_mode(system):
         return system
     try:
         import imageio_ffmpeg
     except ImportError as exc:
+        if system:
+            return system   # better than nothing if imageio-ffmpeg is missing
         raise RuntimeError(
             "ffmpeg not found. Install it, or run: pip install imageio-ffmpeg"
         ) from exc
     return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def _ffmpeg_supports_fps_mode(exe: str) -> bool:
+    """True if this ffmpeg knows the -fps_mode option (ffmpeg >= 5.1)."""
+    try:
+        out = subprocess.run([exe, "-hide_banner", "-h", "full"],
+                             capture_output=True, text=True, errors="replace")
+        if "fps_mode" in (out.stdout + out.stderr):
+            return True
+        # Fallback: parse the version number from `ffmpeg -version`.
+        ver = subprocess.run([exe, "-version"], capture_output=True,
+                             text=True, errors="replace").stdout
+        import re
+        m = re.search(r"ffmpeg version n?(\d+)\.(\d+)", ver)
+        if m:
+            major, minor = int(m.group(1)), int(m.group(2))
+            return (major, minor) >= (5, 1)
+    except Exception:
+        pass
+    return False
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:

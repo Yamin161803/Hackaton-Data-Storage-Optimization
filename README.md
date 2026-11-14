@@ -1,5 +1,15 @@
 # Hackaton-Data-Storage-Optimization
 
+> Store meetings and slide decks for a fraction of the space — and get them back exactly.
+
+**Campor Hackathon 2026 (November) — our submission.**
+By **Amin Afzali**, **Philip Wollsén Ervius** and **Petter Eriksson**.
+
+The challenge is set by **Ericsson** and described in
+[`docs/ericsson.pdf`](docs/ericsson.pdf).
+
+---
+
 Cut down how much space meeting recordings and slide decks take up, without losing
 what's in them.
 
@@ -19,6 +29,20 @@ what's in them.
 
 Everything runs locally: speech to text uses faster-whisper (GPU if present, otherwise
 CPU), and summaries and keywords come from a local model through Ollama.
+
+## Architecture & design
+
+For the technical design — the models, key decisions, the data structure, and the exact
+mechanics of the PDF/PPTX breakdown — see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+It is in three parts:
+
+1. **Voice-to-text with speaker identification** — faster-whisper `large-v3` +
+   pyannote diarization, device auto-detection, timestamp-overlap merging.
+2. **The data structure** — content-addressed store, page-level dedup, the version
+   DAG, and why it is scalable, stable and searchable (FTS5 now, a knowledge-base /
+   RAG layer designed-for).
+3. **PDF / PPTX breakdown** — three-tier hashing, the shared lossless image store,
+   in-place image-stream substitution (pikepdf), and pixel/byte-identical reassembly.
 
 ## Quick start
 
@@ -267,13 +291,14 @@ src/
   transcription/      transcribe.py (faster-whisper), diarize.py (pyannote speaker labels)
   notes/              meeting_notes.py (Markdown), summarize.py (Ollama), pdf_to_markdown.py
   dedupe/             slide_dedupe.py (duplicate slide/document cleanup)
-  store/              document store: page-level dedup, versions, shared images, search
+  store/              document store: page-level dedup, versions, shared images, search,
+                      skeletons (pdf_skeleton.py, pptx_skeleton.py, image_store.py) for exact restore
   website/            Flask server, dedupe_api.py, version_tree_api.py, i18n.py
   website/static/     index.html, dedupe.html, versions.html, i18n.js (EN/SV texts)
 tests/                pytest tests for all of the above
 data/                 raw/, meeting_notes/, resources/, trash/ (contents git-ignored),
                       slide_index.json, database + objects/ (document store)
-docs/                 notes.txt (design notes), ericsson.pdf (challenge brief)
+docs/                 ARCHITECTURE.md (3-part technical design), notes.txt (design notes)
 run.py                launcher for every tool (python run.py -h)
 ```
 
@@ -291,9 +316,13 @@ How it works (see the schema in `src/store/schema.sql`):
   normalized text + referenced image hashes. A document is stored as an *ordered
   list of page hashes* (a manifest), never as page content — so a 50-slide deck
   that shares 48 pages with another only adds 2 new pages.
-- **No overlap threshold.** Shared title/closing slides dedup individually and
-  never force a false "these are the same deck" merge. Identity is *content*,
-  never the filename.
+- **Content, not filename.** Identity is the content hash, never the filename, so
+  renamed copies are recognized. A regenerated file (same pages, different bytes) is
+  caught by a second `content_hash` gate.
+- **Family threshold.** Two documents join the same version family only when they
+  share **≥3 pages** (`document_edge.shared`); sharing 1–2 pages is a weak link (a
+  "bridge"), so identical title/closing slides never wrongly merge two unrelated
+  decks into one family.
 - **Inverted index** (`page_hash -> document`) makes "which documents share this
   page?" fast, so version detection only diffs candidates instead of scanning
   every document.
