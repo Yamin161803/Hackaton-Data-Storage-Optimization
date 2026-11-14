@@ -162,7 +162,7 @@ class DocumentInput:
 
 @dataclass
 class IngestResult:
-    status: str                 # "stored" | "duplicate"
+    status: str                 # "stored" | "duplicate" (byte) | "content_duplicate"
     document_id: int | None
     new_pages: int = 0          # pages whose content was not already stored
     shared_pages: int = 0       # pages already present (dedup hits)
@@ -255,12 +255,29 @@ class Store:
 
     # -- ingest --
 
-    def ingest(self, doc: DocumentInput, record_edges: bool = True) -> IngestResult:
-        """Ingest a document. Exact duplicates are discarded.
+    def _content_hash(self, page_hashes: list[str]) -> str:
+        """Regeneration-stable document identity: hash of the ordered page hashes.
 
-        Returns an IngestResult describing what happened (stored vs duplicate,
-        how many pages were new vs shared, and which existing documents share
-        pages — the candidates for a version relationship).
+        Unlike the full-file byte hash, this is identical for a file and any
+        content-faithful regeneration of it (same pages, same order), so a
+        downloaded-then-reuploaded node is recognized as the same content.
+        """
+        return _sha(*page_hashes)
+
+    def find_document_by_content_hash(self, content_hash: str) -> int | None:
+        row = self.conn.execute(
+            "SELECT id FROM document WHERE content_hash = ?", (content_hash,)
+        ).fetchone()
+        return row["id"] if row else None
+
+    def ingest(self, doc: DocumentInput, record_edges: bool = True) -> IngestResult:
+        """Ingest a document. Byte-identical and content-identical files are discarded.
+
+        Two dedup gates:
+          1. full_hash    -- exact byte duplicate (fast, certain).
+          2. content_hash -- same ordered pages, possibly different bytes
+                             (recognizes a regenerated-then-reuploaded file).
+        Returns an IngestResult (stored / duplicate / content_duplicate).
         """
         # 1. Exact-duplicate gate (full-file hash). Cheapest/most certain.
         existing = self.find_document_by_full_hash(doc.full_hash)
@@ -269,18 +286,25 @@ class Store:
 
         page_hashes = [p.hash for p in doc.pages]
 
-        # 2. Find version candidates BEFORE inserting (docs sharing any page).
+        # 2. Content-duplicate gate: same pages in the same order, different bytes.
+        content_hash = self._content_hash(page_hashes)
+        content_existing = self.find_document_by_content_hash(content_hash)
+        if content_existing is not None:
+            return IngestResult(status="content_duplicate", document_id=content_existing)
+
+        # 3. Find version candidates BEFORE inserting (docs sharing any page).
         shared_counts = self.documents_sharing_pages(page_hashes)
         candidates = sorted(shared_counts, key=lambda d: -shared_counts[d])
 
-        # 3. Insert document row.
+        # 4. Insert document row.
         doc_id = _id_from_hash(doc.full_hash)
         now = datetime.now(timezone.utc).isoformat()
         self.conn.execute(
-            "INSERT INTO document (id, full_hash, quick_hash, file_size, source_type, "
-            "source_name, title, page_count, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (doc_id, doc.full_hash, doc.quick_hash, doc.file_size, doc.source_type,
-             doc.source_name, doc.title, len(doc.pages), now),
+            "INSERT INTO document (id, full_hash, content_hash, quick_hash, file_size, "
+            "source_type, source_name, title, page_count, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (doc_id, doc.full_hash, content_hash, doc.quick_hash, doc.file_size,
+             doc.source_type, doc.source_name, doc.title, len(doc.pages), now),
         )
 
         # 4. Dedup + store pages, write the ordered manifest.

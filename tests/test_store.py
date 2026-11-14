@@ -75,6 +75,21 @@ def test_exact_duplicate_is_discarded(store):
     assert pages_in_store(store) == 3
 
 
+def test_regenerated_file_recognized_by_content_hash(store):
+    # A file regenerated from the store has the SAME pages but DIFFERENT bytes
+    # (different full_hash). The content_hash gate must recognize it.
+    original = make_doc(["intro", "body", "outro"], "deck.pptx", full_hash="a" * 64)
+    assert store.ingest(original).status == "stored"
+
+    # Same pages, same order, but a *different* file hash (as a regeneration would be).
+    regenerated = make_doc(["intro", "body", "outro"], "deck-regenerated.pptx",
+                           full_hash="f" * 64)
+    r = store.ingest(regenerated)
+    assert r.status == "content_duplicate"      # recognized despite different bytes
+    assert docs_in_store(store) == 1
+    assert pages_in_store(store) == 3
+
+
 # ---------- shared start/end slides, unique middle (no false merge) ----------
 
 def test_shared_start_and_end_slides_dedup_without_false_merge(store):
@@ -202,15 +217,16 @@ def test_pptx_same_picture_rewritten_notes_is_visual_duplicate(store):
     assert rb.visual_duplicates[0]["image_hash"] == __import__("store").hash_images(["IMG1"])
 
 
-def test_pptx_same_picture_same_notes_is_exact_page_dup(store):
+def test_pptx_same_picture_same_notes_is_content_duplicate(store):
     a = make_pptx([("notes", ["IMG1"])], "a.pptx")
     store.ingest(a)
-    # Different FILE (so not a file-level dup) but the single slide is identical.
+    # Different FILE bytes, but the single slide is identical (same picture + notes)
+    # -> same page set -> recognized as a content duplicate by the content_hash gate.
     b = make_pptx([("notes", ["IMG1"])], "b.pptx", full_hash="b" * 64)
     rb = store.ingest(b)
-    assert rb.status == "stored"
-    assert rb.shared_pages == 1 and rb.new_pages == 0   # exact page dedup
-    assert rb.visual_duplicates == []                   # not a *reworded* dup
+    assert rb.status == "content_duplicate"
+    assert docs_in_store(store) == 1
+    assert pages_in_store(store) == 1
 
 
 def test_pptx_empty_notes_slides_not_visual_dups_of_each_other(store):

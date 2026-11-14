@@ -23,7 +23,11 @@ PRAGMA foreign_keys = ON;
 -- row here is a distinct file by content.
 CREATE TABLE IF NOT EXISTS document (
   id            INTEGER PRIMARY KEY,            -- first 8 bytes of full_hash as int64 (like videohash.video_id)
-  full_hash     TEXT    NOT NULL UNIQUE,        -- SHA-256 of whole file (exact-dup key)
+  full_hash     TEXT    NOT NULL UNIQUE,        -- SHA-256 of whole file (exact BYTE-dup key)
+  content_hash  TEXT,                           -- SHA-256 of the ordered page-hash manifest.
+                                                -- Regeneration-STABLE: a file regenerated from the store has
+                                                -- different bytes (full_hash) but the same pages, so this still
+                                                -- matches -> "same content, different bytes" is recognized.
   quick_hash    TEXT,                           -- SHA-256 of size + first/last 1 MiB (fast pre-check)
   file_size     INTEGER NOT NULL,               -- bytes (cheapest pre-check)
   source_type   INTEGER NOT NULL,               -- 1=pdf, 2=pptx
@@ -32,6 +36,8 @@ CREATE TABLE IF NOT EXISTS document (
   page_count    INTEGER NOT NULL DEFAULT 0,     -- number of pages/slides in the manifest
   created_at    TEXT    NOT NULL                -- ISO-8601 ingest time
 );
+
+CREATE INDEX IF NOT EXISTS idx_document_content_hash ON document(content_hash);
 
 -- One row per UNIQUE page/slide, content-addressed. Shared pages across
 -- documents exist once here. Text lives inline for search; a page may also
