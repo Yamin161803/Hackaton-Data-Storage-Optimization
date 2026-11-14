@@ -89,7 +89,11 @@ def tree(doc_id):
 
 @bp.route("/api/tree/<doc_id>/download")
 def download_node(doc_id):
-    """Regenerate this node as a PDF/PPTX and return it as a download."""
+    """Download this node as the EXACT original file (pixel/byte-identical).
+
+    Uses the stored restore skeleton (image streams put back exactly). Falls
+    back to the old text regeneration only if no skeleton exists for this doc.
+    """
     try:
         doc_id = int(doc_id)
     except ValueError:
@@ -102,15 +106,28 @@ def download_node(doc_id):
         if row is None:
             return jsonify(detail=f"No document with id {doc_id}"), 404
         source_type = {1: "pdf", 2: "pptx"}.get(row["source_type"], "?")
-        pages = s.reconstruct(doc_id)
+        name = row["source_name"]
+
+        # Preferred: exact restore from skeleton.
+        restored = None
+        try:
+            restored = s.restore_original(doc_id)
+        except Exception:
+            restored = None
+
+        if restored is not None:
+            data, ext = restored
+            mimetype = ("application/pdf" if ext == "pdf"
+                        else "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+        else:
+            # Fallback: old content regeneration (no skeleton available).
+            pages = s.reconstruct(doc_id)
+            data, mimetype, ext = regenerate(source_type, pages)
+    except ValueError as exc:
+        return jsonify(detail=str(exc)), 400
     finally:
         s.close()
 
-    try:
-        data, mimetype, ext = regenerate(source_type, pages)
-    except ValueError as exc:
-        return jsonify(detail=str(exc)), 400
-
-    stem = Path(row["source_name"] or f"doc_{doc_id}").stem
+    stem = Path(name or f"doc_{doc_id}").stem
     return send_file(io.BytesIO(data), mimetype=mimetype, as_attachment=True,
                      download_name=f"{stem}.{ext}")

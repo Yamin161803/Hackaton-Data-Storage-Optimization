@@ -139,3 +139,18 @@ CREATE TABLE IF NOT EXISTS page_image (
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS idx_page_image_image ON page_image(image_hash);
+
+-- ---------------------------------------------------------------------------
+-- Document skeletons: everything needed to restore the EXACT original file.
+-- ---------------------------------------------------------------------------
+-- For PDF: skeleton_bytes = the original PDF with image streams blanked;
+--          skeleton_json  = the image map (walk index -> image hash + filter).
+-- For PPTX: skeleton_bytes is empty; skeleton_json = the ordered ZIP entries,
+--          each referencing an image-store hash. Restore reassembles exactly.
+-- Images themselves live in the shared object store (data/objects), deduped.
+CREATE TABLE IF NOT EXISTS document_skeleton (
+  document_id    INTEGER PRIMARY KEY REFERENCES document(id) ON DELETE CASCADE,
+  kind           TEXT NOT NULL,          -- 'pdf' | 'pptx'
+  skeleton_json  TEXT NOT NULL,          -- JSON skeleton (image/entry map)
+  skeleton_blob  BLOB                    -- PDF: blanked-PDF bytes; PPTX: NULL
+);

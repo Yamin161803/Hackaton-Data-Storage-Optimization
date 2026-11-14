@@ -137,7 +137,29 @@ def ingest_file(store: Store, path: Path, use_images: bool = True,
         for idx, image_hashes in page_image_links:
             if image_hashes:
                 store.link_page_images(pages[idx].hash, image_hashes)
+        # Build + save the pixel-identical restore skeleton (images -> shared
+        # ImageStore; skeleton -> document_skeleton). Best-effort: a skeleton
+        # failure must not break ingest.
+        _save_skeleton(store, result.document_id, path, source_type)
     return result
+
+
+def _save_skeleton(store, document_id, path: Path, source_type) -> None:
+    """Create and persist the exact-restore skeleton for a PDF/PPTX document."""
+    import json
+    ext = path.suffix.lower()
+    images = store.image_store()
+    try:
+        if ext == ".pdf":
+            from store.pdf_skeleton import store_pdf
+            blob, skel = store_pdf(path, images)
+            store.save_skeleton(document_id, "pdf", json.dumps(skel), blob)
+        elif ext == ".pptx":
+            from store.pptx_skeleton import store_pptx
+            skel = store_pptx(path, images)
+            store.save_skeleton(document_id, "pptx", json.dumps(skel), None)
+    except Exception:
+        pass   # dedup/versioning still works even if exact-restore is unavailable
 
 
 def main(argv=None) -> int:

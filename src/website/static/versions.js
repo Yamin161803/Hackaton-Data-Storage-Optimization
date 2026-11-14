@@ -84,15 +84,16 @@ async function selectFamily(rootOrDocId) {
 }
 
 /* ---------- graph ---------- */
-function toTree(fam) {
-  const byId = {}; fam.nodes.forEach(n => byId[n.id] = { ...n, children: [] });
-  const childSet = new Set();
-  for (const e of fam.edges) if (byId[e.parent] && byId[e.child]) { byId[e.parent].children.push(byId[e.child]); childSet.add(e.child); }
-  const roots = fam.nodes.filter(n => !childSet.has(n.id)).map(n => byId[n.id]);
-  const mk = (n) => {
+/* Build ECharts GRAPH data (nodes + links). A version family is a DAG — it can
+   have multiple roots and branches — so a `tree` series (single root) dropped
+   most nodes. A `graph` series shows ALL nodes and their relationships. */
+function toGraph(fam) {
+  const nodes = fam.nodes.map((n, i) => {
     const isNew = n.id === fam.selected, isClicked = n.id === _clickedId;
     return {
-      name: shortName(n.name), _id: n.id, _full: n.name, _pages: n.pages, _date: n.date, _selected: isNew,
+      id: String(n.id), name: shortName(n.name),
+      _id: n.id, _full: n.name, _pages: n.pages, _date: n.date, _selected: isNew,
+      value: n.age_rank,
       itemStyle: {
         color: isNew ? cssVar("--green") : cssVar("--primary"),
         borderColor: isClicked ? cssVar("--teal") : (isNew ? cssVar("--green") : cssVar("--primary")),
@@ -100,30 +101,46 @@ function toTree(fam) {
         shadowBlur: isClicked ? 22 : (isNew ? 14 : 0),
         shadowColor: isClicked ? cssVar("--teal") : cssVar("--green"),
       },
-      symbolSize: isClicked ? 18 : (isNew ? 15 : 11),
-      children: (n.children || []).map(mk),
+      symbolSize: isClicked ? 24 : (isNew ? 20 : 15),
+      label: { show: true, position: "right", color: cssVar("--text"), fontSize: 12 },
     };
-  };
-  return roots.map(mk);
+  });
+  const links = (fam.edges || []).map(e => ({
+    source: String(e.parent), target: String(e.child),
+    _rel: e.relation, _added: e.added, _removed: e.removed,
+    lineStyle: { color: cssVar("--primary"), width: 2, opacity: .55, curveness: .15 },
+  }));
+  return { nodes, links };
 }
 
 function draw(fam) {
   ensureChart();
   if (!_chart) return;
+  const g = toGraph(fam);
   _chart.setOption({
     tooltip: {
-      trigger: "item", triggerOn: "mousemove",
+      trigger: "item",
       formatter: (p) => {
-        const d = p.data, e = (fam.edges || []).find(x => x.child === d._id);
+        if (p.dataType === "edge") {
+          return `${p.data._rel}: +${p.data._added} / −${p.data._removed} pages`;
+        }
+        const d = p.data, e = (fam.edges || []).find(x => String(x.child) === d.id);
         const change = e ? `${e.relation}: +${e.added} / −${e.removed} pages` : (d._selected ? "added now" : "original version");
         return `<b>${esc(d._full)}</b><br>${d._pages} pages<br>${(d._date || "").slice(0, 10)}<br>${change}`;
       },
     },
     series: [{
-      type: "tree", data: toTree(fam), orient: _orient, roam: true, initialTreeDepth: -1, symbol: "circle",
-      label: { position: _orient === "TB" ? "bottom" : "right", color: cssVar("--text"), fontSize: 12, distance: 8 },
-      lineStyle: { color: cssVar("--primary"), width: 2, opacity: .5, curveness: .25 },
-      expandAndCollapse: true, animationDuration: 400, top: "6%", left: "10%", right: "10%", bottom: "6%",
+      type: "graph",
+      layout: g.links.length ? "force" : "circular",
+      roam: true,                              // zoom + pan
+      draggable: true,
+      symbol: "circle",
+      edgeSymbol: ["none", "arrow"], edgeSymbolSize: 8,
+      force: { repulsion: 220, edgeLength: 90, gravity: .08 },
+      data: g.nodes, links: g.links,
+      lineStyle: { color: cssVar("--primary"), width: 2, opacity: .55, curveness: .15 },
+      emphasis: { focus: "adjacency" },
+      animationDuration: 400,
     }],
   }, true);
   _chart.resize();

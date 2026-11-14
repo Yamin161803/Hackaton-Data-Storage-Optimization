@@ -497,3 +497,52 @@ class Store:
             out.append({"position": r["position"], "page_hash": r["hash"],
                         "text": r["text"], "images": paths})
         return out
+
+    # -- pixel-identical skeleton store/restore --
+
+    def image_store(self):
+        """A shared ImageStore rooted at this store's objects dir (skeleton images)."""
+        from .image_store import ImageStore
+        return ImageStore(self.objects_dir / "skeleton_images")
+
+    def save_skeleton(self, document_id: int, kind: str, skeleton_json: str,
+                      skeleton_blob: bytes | None = None) -> None:
+        """Persist the restore skeleton for a document (pdf/pptx)."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO document_skeleton "
+            "(document_id, kind, skeleton_json, skeleton_blob) VALUES (?,?,?,?)",
+            (document_id, kind, skeleton_json, skeleton_blob),
+        )
+        self.conn.commit()
+
+    def get_skeleton(self, document_id: int) -> dict | None:
+        """Return {kind, skeleton_json, skeleton_blob} or None if no skeleton stored."""
+        row = self.conn.execute(
+            "SELECT kind, skeleton_json, skeleton_blob FROM document_skeleton "
+            "WHERE document_id = ?", (document_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        blob = row["skeleton_blob"]
+        return {"kind": row["kind"], "skeleton_json": row["skeleton_json"],
+                "skeleton_blob": bytes(blob) if blob is not None else None}
+
+    def restore_original(self, document_id: int) -> tuple[bytes, str] | None:
+        """Rebuild the EXACT original file from its skeleton. Returns (bytes, ext).
+
+        Pixel-identical for PDF, byte-identical for PPTX. None if no skeleton.
+        """
+        import json
+        skel = self.get_skeleton(document_id)
+        if skel is None:
+            return None
+        images = self.image_store()
+        if skel["kind"] == "pdf":
+            from .pdf_skeleton import restore_pdf
+            data = restore_pdf(skel["skeleton_blob"], json.loads(skel["skeleton_json"]), images)
+            return data, "pdf"
+        if skel["kind"] == "pptx":
+            from .pptx_skeleton import restore_pptx
+            data = restore_pptx(json.loads(skel["skeleton_json"]), images)
+            return data, "pptx"
+        return None
