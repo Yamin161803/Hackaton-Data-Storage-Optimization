@@ -93,8 +93,11 @@ def add_speakers(audio: Path, transcript: Path, num_speakers: int | None = None,
 
     token = find_token()
     if not token:
-        raise RuntimeError("no Hugging Face token: set HF_TOKEN or create .hf_token "
-                           "in the project folder")
+        raise RuntimeError(
+            "no Hugging Face token (speaker labels are optional). "
+            "Create a free token at https://huggingface.co/settings/tokens, accept "
+            "the terms at https://huggingface.co/pyannote/speaker-diarization-community-1, "
+            "then put it in a .hf_token file in the project folder (or set HF_TOKEN).")
     def report(dev: str, hint: str | None) -> None:
         print(f"      finding who speaks when (pyannote on {dev})...")
         if hint:
