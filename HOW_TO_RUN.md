@@ -3,6 +3,15 @@
 Every app in this project starts through one launcher, `run.py`. It works the same on
 Windows, macOS and Linux. Run it from the project folder:
 
+**Everything runs from the command line — the website is optional.** Every feature
+(meeting notes, dedup, PDF→Markdown, the document store and search, lookup) has a CLI
+command. The website in section 2 is just a convenience front-end over the same tools;
+skip it entirely if you prefer the terminal.
+
+If a required package isn't installed yet, the commands tell you to run
+`python run.py setup` instead of crashing. Optional features (speaker labels, Ollama
+summaries, GPU) degrade gracefully — the rest keeps working.
+
 ```bash
 python run.py
 ```
@@ -85,7 +94,7 @@ pip install --force-reinstall torch torchaudio --index-url https://download.pyto
 This is a ~2.5 GB download. Afterwards `check` shows "speaker labels run on: GPU".
 If the GPU runs out of memory, speaker detection falls back to the CPU by itself.
 
-## 2. The website (easiest)
+## 2. The website (optional)
 
 ```bash
 python run.py web

@@ -2,13 +2,109 @@
 
 Technical documentation of the data-storage-optimization system: the models,
 the key engineering decisions, the data structures, and the exact mechanics of
-the PDF/PPTX breakdown. Three parts:
+the PDF/PPTX breakdown.
 
-1. **Voice-to-text with speaker identification**
-2. **The data structure** — why it is scalable, stable, and searchable (for
-   future search features and a knowledge-base AI)
-3. **PDF/PPTX breakdown** — hash crafting, storage, picture removal and exact
-   reassembly, and why it saves storage
+- **Part A** — Processing pipeline & components (video splitting, dedup engine,
+  notes assembly, the website) — *team-wide*
+- **Part 1** — Voice-to-text with speaker identification
+- **Part 2** — The data structure — why it is scalable, stable, and searchable
+  (for future search features and a knowledge-base AI)
+- **Part 3** — PDF/PPTX breakdown — hash crafting, storage, picture removal and
+  exact reassembly, and why it saves storage
+
+---
+
+## Part A — Processing pipeline & components
+
+The system is a set of composable steps. A recording or document enters, is
+broken into content, and ends up in the store or as notes. Each component is a
+standalone module under `src/` (runnable via `run.py` or directly).
+
+```
+video/audio ─▶ video_splitter ─▶ transcription ─▶ notes ─▶ (meeting notes .md)
+                 (key frames)      (whisper +        (markdown
+                 + audio           pyannote)          + Ollama summary)
+
+PDF / PPTX  ─▶ dedupe / store ─▶ page+image dedup, version DAG, skeletons
+                                 ─▶ search (FTS5) / Versions graph / restore
+```
+
+### Video splitting — key-frame extraction (`src/video_splitter/splitter.py`)
+
+Turns a video into **key frames + an audio track**, so a long recording is
+represented by the few frames that actually changed plus its speech.
+
+- **Two-pass ffmpeg.** Pass 1 decodes every frame to a tiny grayscale image;
+  Python (numpy) compares each with the *last saved* frame. Pass 2 writes only
+  the chosen frames at full resolution. (ffmpeg is invoked with `-fps_mode`,
+  which is why a capable ffmpeg ≥5.1 is required — see the version check in
+  `find_ffmpeg()`.)
+- **Change detection.** The first frame is always kept; after that a frame is
+  kept when at least `--threshold` (default 0.05 = 5%) of the picture changed
+  since the last kept frame — i.e. a new slide / scene change.
+- **Presentation vs camera auto-detection.** In slide videos the picture is
+  still almost all the time; in camera footage nearly every consecutive frame
+  differs. The splitter measures this "motion" ratio; if a large share of frame
+  pairs differ (measured: slide talk ~0.2%, camera ~53%) it switches to a much
+  higher `--camera-threshold` (default 0.40) so only real scene changes are
+  kept, not every head movement. `--mode auto|presentation|camera` overrides.
+- **Audio-only files** (e.g. MP3) get a part every 5 minutes instead of frames.
+
+### Silent-frame filtering (in notes assembly)
+
+After frames and transcript are aligned, frames shown while **nobody speaks**
+are dropped: a frame is "silent" when no text lands under it, or it has fewer
+than `--min-words` (default 10) words and is on screen <10 s. Short pauses (up
+to `--max-silent-frames`, default 3) are kept; longer runs are removed and their
+text is moved to the previous kept frame — so nothing *said* is lost, only
+redundant stills. This is a storage win: a talk keeps ~its real slides, not one
+frame per micro-change.
+
+### Slide/document dedup engine (`src/dedupe/slide_dedupe.py`)
+
+Answers "which PDF/PPTX/image files can be removed without losing any unique
+slide?" — the file-level cleanup that complements the page-level store.
+
+- **Slide hashing.** Each slide = SHA-256 of its normalized text + the hashes of
+  its images (an image file counts as a one-slide document; page numbers
+  ignored). `normalize_text` is shared with the store so both agree on slide
+  identity.
+- **Prefilter (cheap, before opening files).** size → quick_hash (3×64 KB:
+  start/middle/end) → full_hash. Byte-identical copies are caught without
+  extracting slides (the slowest step).
+- **Two decision modes:**
+  - **online** (default): files handled one at a time; state persists in
+    `data/slide_index.json`, so later runs only process new files.
+  - **batch**: **greedy set cover** over all files — selects the fewest files
+    that collectively contain every unique slide. Usually a smaller result.
+- **pypdf speed-ups** (`check_pypdf_speedup.py`): per-file font/form caches +
+  memoized content-stream parsing; self-verifies identical extracted text.
+- Files are only moved (to `--trash`) when asked; report-only by default, and
+  nothing is deleted if the folder changed since confirmation.
+
+### Notes assembly & summaries (`src/notes/`)
+
+- **`meeting_notes.py`** turns a split folder (frames + `timestamps.csv`) plus a
+  transcript into one Markdown file: each key frame with what was said while it
+  was on screen, optional summary/keywords/speaker labels, and a YAML
+  **front-matter fingerprint** (size, quick_hash, full_hash) so the notes↔video
+  link survives renaming (`lookup.py`).
+- **`summarize.py`** calls a **local model via Ollama** (`localhost:11434`),
+  standard-library only, asking for JSON (`overview` + `key_points`, and
+  `keywords`). Long transcripts are chunked and the partial results merged.
+  Failure is non-fatal — notes are still written without the summary.
+- **`pdf_to_markdown.py`** extracts a PDF to Markdown with images saved once,
+  named by the **SHA-256 of their bytes** (same content-addressing idea as the
+  store), so identical images across PDFs are stored once.
+
+### The website (`src/website/`, Flask)
+
+One local server exposes the whole pipeline: `/` (video → notes upload),
+`/dedupe` (folder dedup + the Versions/Shared-pictures tables), `/versions` (the
+version hypergraph + per-node restore download). Blueprints: `dedupe_api.py`,
+`version_tree_api.py`. **i18n** (`static/i18n.js` for pages, `i18n.py` for server
+messages) supports EN/SV via an `X-Lang` header. A fingerprint cache returns
+already-processed uploads instantly.
 
 ---
 

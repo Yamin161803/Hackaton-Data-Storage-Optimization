@@ -48,6 +48,20 @@ def run(*args: str | Path) -> int:
         return 130
 
 
+def _require(modules: list[str], feature: str) -> bool:
+    """Check that the given importable modules are installed. If any are missing,
+    print a friendly, actionable message and return False (so the caller can stop
+    cleanly instead of crashing with a raw ModuleNotFoundError)."""
+    import importlib.util
+    missing = [m for m in modules if importlib.util.find_spec(m) is None]
+    if missing:
+        print(f"Can't run {feature}: missing package(s): {', '.join(missing)}.\n"
+              f"Fix it with:  python run.py setup\n"
+              f"(then:        python run.py check   to confirm everything is ready)")
+        return False
+    return True
+
+
 # ---------------------------------------------------------------- commands
 
 def cmd_setup(extra: list[str]) -> int:
@@ -135,6 +149,8 @@ def cmd_check(_extra: list[str]) -> int:
 
 
 def cmd_web(extra: list[str]) -> int:
+    if not _require(["flask"], "the website"):
+        return 1
     port = "8000"
     if "--port" in extra and extra.index("--port") + 1 < len(extra):
         port = extra[extra.index("--port") + 1]
@@ -155,6 +171,8 @@ def cmd_notes(extra: list[str]) -> int:
               "e.g.   python run.py notes data/raw/talk.mp4 --keywords\n"
               "       python run.py notes data/raw --no-summary")
         return 2
+    if not _require(["faster_whisper"], "meeting notes (speech to text)"):
+        return 1
     target, options = Path(extra[0]), extra[1:]
     if not target.exists():
         print(f"error: {target} not found")
@@ -176,6 +194,8 @@ def cmd_notes(extra: list[str]) -> int:
 
 
 def cmd_dedupe(extra: list[str]) -> int:
+    if not _require(["pypdf", "pptx", "PIL"], "duplicate cleanup"):
+        return 1
     if not extra or extra[0].startswith("-"):
         extra = [str(ROOT / "data" / "raw"), *extra]
         print("no folder given, using data/raw")
@@ -183,6 +203,8 @@ def cmd_dedupe(extra: list[str]) -> int:
 
 
 def cmd_pdf(extra: list[str]) -> int:
+    if not _require(["pypdf"], "PDF -> Markdown"):
+        return 1
     if not extra:
         print("usage: python run.py pdf <file.pdf> [--out folder]")
         return 2

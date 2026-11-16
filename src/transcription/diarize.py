@@ -52,10 +52,22 @@ def find_token() -> str | None:
     return None
 
 
+TOKEN_HELP = (
+    "Speaker labels need a free Hugging Face token (this step is optional — "
+    "everything else works without it).\n"
+    "  1. Create a token at https://huggingface.co/settings/tokens (read access).\n"
+    "  2. Accept the model terms once at "
+    "https://huggingface.co/pyannote/speaker-diarization-community-1\n"
+    "  3. Put the token in a file named .hf_token in the project folder, "
+    "or set the HF_TOKEN environment variable.\n"
+    "Then re-run with --speakers. Without it, notes are written without speaker labels."
+)
+
+
 def read_token() -> str:
     tok = find_token()
     if not tok:
-        sys.exit("ERROR: no HF token (set HF_TOKEN or create .hf_token)")
+        sys.exit("No Hugging Face token found.\n\n" + TOKEN_HELP)
     return tok
 
 
