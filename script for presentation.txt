@@ -1,0 +1,44 @@
+-----slide 0
+Ericsson Presentation
+Hallå :)  I'm Petter, This is Amin and Philip --- point
+And we are team 26 with the Ericsson Challange
+
+------ slide 1
+
+Compresssion, I would be baffled if Ericsson doesn't have the best Compression software and Algorithms out there for their storage.
+So we had to think differently to solve these problems
+------------------------slide 2 
+Why do we need 60 FPS on a video?(it's good) but 30 FPS is okay. and we think so is 1 fps in this use case.
+Does 60 pictures in 1 second really say more than 1 picture? or can we even go lower?
+
+Sure your boses jokes won't be as funny to read opposed to watch but we think it's a worth while sacrifice to save 
+98% storage on videos!!!
+
+So how did we reach 98%.
+We started probably as everyone else, a Speach to text model, in our case we choose Faster-Whisper LargeV3
+with Pyannote for Speaker identification layered on top. All TIMESTAMPED , here is where the important information lays
+--------------------------slide 3 
+
+Thats audio done, next video
+Video splitting and deciding what to keep. Sorry Stefan but all data isn't Gold, The intern scratching his nose thinking about tonights dinner isn't worth a couple MB.
+
+So we looked at the important parts, Beginning (introductions, who's attending, what is this video), Slide changes(someone starts sharing their screen), When people are speaking actualy speaking. especially senteses and paragrapghs
+
+But everything is a Balance between the risk of losing information and the cost of Keeping it. That's why we landed at keeping 2%.
+
+------------- slide 4 
+But Videos isn't everything, how about your one-drive, We all saw how Stefan's one drive was full of Duplicates, But in our opinion a live one-drive of an employee might be the worst thing to poke around in. We don't know anything about what they want in there and what they are working on right now. And i don't want to think about what the consecvences of deleting the wrong thing could be.
+
+So we instead focused on another problem, what happens when someone changes computers, quits or the real gold mine, retire. Our solution starts when IT department snapshots their system and now unused one drive.
+We search it all looking for Pictuers,Powerpoints and PDFs and by hashing these files and comparing hashes, same = discard/delete, but different hashes could still mean Powerpoints and PDFs share the same Slides and Pages and are just different versions. So we Hash every slide and page, A Powerpoint with 80% Similar slides as another means we only have to save the 20% difference, think of version control. 
+
+But we went even deeper, photos, Big companies spend big money on photos, logos and their brand and copying is always easier than creating new, that's why we disassemble each slide we save looking for photos to take out and store, leaving a reference with the size and location save even more space. Taking what would be a MB slide into Bytes to store 
+
+In Stefans Presentation We saw him use the short verison of the presentation, And if you only use the short verison the normal behavour would be just deleting the extra slides, Creating a subset
+
+If Stefan one day lost his short presentation he can easily go to our Archive which is designed to be easily searchable and knowledgebase ready for AI. Find his presentation and download the exact same presentation!
+This presentation is MBs in size but we stored it for pretty much free! because all the parts where already there.
+
+And that's where we shine the most. Our solution only gets better the more that's stored, And in a world where Storage isn't looking like it's going to get much cheaper having a solution which Grows less over time can be priceless.
+
+Time for Demo?
